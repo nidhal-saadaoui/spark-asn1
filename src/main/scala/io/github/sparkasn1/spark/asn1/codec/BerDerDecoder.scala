@@ -227,25 +227,70 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
     }
 
   /**
-   * Decode components from a list of raw elements.
+   * Decode components from a list of raw elements using one of three strategies:
    *
-   * Under AUTOMATIC / IMPLICIT tagging each element may be a DERTaggedObject
-   * with a tag number corresponding to the field's index in the schema.
-   * Absent OPTIONAL fields produce no element and leave their slot null.
+   * 1. Hybrid (schema has explicit tagged-type declarations):
+   *    Components with Asn1TaggedType (APPLICATION or CONTEXT) are matched by
+   *    (tagClass, tagNumber); bare components are matched positionally.
+   *    Covers: EXPLICIT/IMPLICIT TAGS modules (RFC 5280 X.509), APPLICATION tags
+   *    (telecom CDR), and mixed schemas.
    *
-   * Fall-back (no tagging / explicit tagging / untagged module): align positionally.
+   * 2. Index-based (AUTOMATIC TAGS style):
+   *    No schema-level tagged types, but wire elements are all context-tagged.
+   *    Tag number equals the component's schema index.
+   *
+   * 3. Positional:
+   *    No context tags anywhere; components align one-to-one in order.
    */
   private def decodeComponents(
     elements:      Seq[ASN1Primitive],
     components:    Seq[ComponentType],
-    requiredNames: Set[String] = Set.empty   // empty = decode all
+    requiredNames: Set[String] = Set.empty
   ): Array[Any] = {
     val decodeAll = requiredNames.isEmpty
     val result    = new Array[Any](components.size)
 
-    val useTagBasedAlignment = elements.nonEmpty && isContextTagged(elements.head)
+    val hasSchemaTaggedTypes = components.exists { c =>
+      resolveRefs(c.asn1Type).isInstanceOf[Asn1TaggedType]
+    }
 
-    if (useTagBasedAlignment) {
+    if (hasSchemaTaggedTypes) {
+      // Hybrid: tagged components matched by (tagClass, tagNo), bare types positionally.
+      val wireTagged: Map[(Int, Int), ASN1TaggedObject] = elements.flatMap {
+        case t: ASN1TaggedObject => Some((t.getTagClass, t.getTagNo) -> t)
+        case _                   => None
+      }.toMap
+      val wireUntagged = scala.collection.mutable.Queue(
+        elements.filterNot(_.isInstanceOf[ASN1TaggedObject]): _*)
+
+      components.zipWithIndex.foreach { case (comp, idx) =>
+        resolveRefs(comp.asn1Type) match {
+          case tt: Asn1TaggedType =>
+            val berClass = tt.tagClass match {
+              case TagClass.ContextSpecific => BERTags.CONTEXT_SPECIFIC
+              case TagClass.Application     => BERTags.APPLICATION
+              case TagClass.Private         => BERTags.PRIVATE
+              case TagClass.Universal       => BERTags.UNIVERSAL
+            }
+            if (decodeAll || requiredNames.contains(comp.name)) {
+              val inner = resolveRefs(tt.innerType)
+              result(idx) = wireTagged.get((berClass, tt.tagNumber)).map { t =>
+                tt.tagging match {
+                  case Tagging.Explicit => decodeValue(t.getBaseObject.toASN1Primitive, inner)
+                  case _                => decodeValue(reinterpretImplicit(t, inner), inner)
+                }
+              }.orNull
+            }
+          case _ =>
+            if (wireUntagged.nonEmpty) {
+              val elem = wireUntagged.dequeue()
+              if (decodeAll || requiredNames.contains(comp.name))
+                result(idx) = decodeValue(elem, comp.asn1Type)
+            }
+        }
+      }
+    } else if (elements.nonEmpty && isContextTagged(elements.head)) {
+      // Index-based: AUTOMATIC TAGS style — tag number equals field index.
       val tagMap: Map[Int, ASN1TaggedObject] = elements.flatMap {
         case t: ASN1TaggedObject => Some(t.getTagNo -> t)
         case _                   => None
@@ -253,9 +298,9 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
       components.zipWithIndex.foreach { case (comp, idx) =>
         if (decodeAll || requiredNames.contains(comp.name))
           result(idx) = tagMap.get(idx).map(t => decodeTaggedField(t, comp.asn1Type)).orNull
-        // else leave result(idx) = null (slot unused after projection)
       }
     } else {
+      // Positional: no context tags anywhere.
       var seqIdx = 0
       components.zipWithIndex.foreach { case (comp, fieldIdx) =>
         if (seqIdx < elements.size) {
@@ -263,22 +308,32 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
             result(fieldIdx) = decodeValue(unwrapTagged(elements(seqIdx)), comp.asn1Type)
           seqIdx += 1
         }
-        // else result(fieldIdx) stays null
       }
     }
     result
   }
 
   /**
-   * Decode a context-tagged field element, handling both EXPLICIT and IMPLICIT tagging.
-   * EXPLICIT: inner primitive retains its universal type tag — unwrap and dispatch normally.
-   * IMPLICIT: original type tag replaced by context tag — reconstruct using the expected schema type.
+   * Decode a tagged field from the index-based path (AUTOMATIC TAGS).
+   *
+   * For primitive inner types: use BouncyCastle's isExplicit() to distinguish
+   * EXPLICIT (inner has its own universal TLV) from IMPLICIT (tag replaces universal tag).
+   *
+   * For constructed inner types (SEQUENCE, SET, …): AUTOMATIC TAGS always uses IMPLICIT
+   * tagging (tag replaces the universal constructed tag), but BouncyCastle marks the outer
+   * tag as explicit=true when the content itself looks structured.  Force the IMPLICIT path.
    */
-  private def decodeTaggedField(tagged: ASN1TaggedObject, schema: Asn1Type): Any =
-    if (tagged.isExplicit)
-      decodeValue(tagged.getBaseObject.toASN1Primitive, schema)
+  private def decodeTaggedField(tagged: ASN1TaggedObject, schema: Asn1Type): Any = {
+    val eff = resolveRefs(schema)
+    val implicitForConstructed = eff match {
+      case _: Asn1Sequence | _: Asn1SequenceOf | _: Asn1Set | _: Asn1SetOf => true
+      case _ => false
+    }
+    if (!tagged.isExplicit || implicitForConstructed)
+      decodeValue(reinterpretImplicit(tagged, eff), eff)
     else
-      decodeValue(reinterpretImplicit(tagged, resolveRefs(schema)), schema)
+      decodeValue(tagged.getBaseObject.toASN1Primitive, eff)
+  }
 
   /**
    * Reconstruct a properly-typed ASN1Primitive from an IMPLICIT-tagged object.

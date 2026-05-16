@@ -1,0 +1,77 @@
+-- Simplified X.509 Certificate schema (RFC 5280 subset)
+-- Suitable for decoding real-world DER certificates with spark-asn1.
+-- ANY fields (AlgorithmIdentifier.parameters, AttributeValue variants)
+-- are handled by: omitting optionals that would mismatch, or using CHOICE.
+
+X509 DEFINITIONS EXPLICIT TAGS ::= BEGIN
+
+Certificate ::= SEQUENCE {
+    tbsCertificate     TBSCertificate,
+    signatureAlgorithm AlgorithmIdentifier,
+    signature          BIT STRING
+}
+
+TBSCertificate ::= SEQUENCE {
+    version         [0] EXPLICIT INTEGER         OPTIONAL,
+    serialNumber    INTEGER,
+    signature       AlgorithmIdentifier,
+    issuer          Name,
+    validity        Validity,
+    subject         Name,
+    subjectPublicKeyInfo SubjectPublicKeyInfo,
+    issuerUID       [1] IMPLICIT BIT STRING      OPTIONAL,
+    subjectUID      [2] IMPLICIT BIT STRING      OPTIONAL,
+    extensions      [3] EXPLICIT Extensions      OPTIONAL
+}
+
+-- parameters (ANY OPTIONAL) is intentionally omitted;
+-- the decoder reads only the declared fields and ignores the rest.
+AlgorithmIdentifier ::= SEQUENCE {
+    algorithm OBJECT IDENTIFIER
+}
+
+Name ::= SEQUENCE OF RDN
+
+RDN ::= SET OF AttributeTypeAndValue
+
+AttributeTypeAndValue ::= SEQUENCE {
+    type  OBJECT IDENTIFIER,
+    value AttributeValue
+}
+
+-- CHOICE so the decoder selects the correct alternative by tag.
+AttributeValue ::= CHOICE {
+    utf8String        UTF8String,
+    printableString   PrintableString,
+    ia5String         IA5String,
+    bmpString         BMPString,
+    teletexString     TeletexString,
+    numericString     NumericString,
+    visibleString     VisibleString,
+    generalString     GeneralString
+}
+
+Validity ::= SEQUENCE {
+    notBefore Time,
+    notAfter  Time
+}
+
+Time ::= CHOICE {
+    utcTime     UTCTime,
+    generalTime GeneralizedTime
+}
+
+SubjectPublicKeyInfo ::= SEQUENCE {
+    algorithm AlgorithmIdentifier,
+    publicKey BIT STRING
+}
+
+Extensions ::= SEQUENCE OF Extension
+
+Extension ::= SEQUENCE {
+    extnId    OBJECT IDENTIFIER,
+    critical  BOOLEAN          OPTIONAL,
+    extnValue OCTET STRING
+}
+
+END
