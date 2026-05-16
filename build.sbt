@@ -3,11 +3,11 @@ val bouncyCastleVer   = "1.80"
 val antlr4RuntimeVer  = "4.9.3"
 val scalaTestVersion  = "3.2.17"
 
-ThisBuild / scalaVersion       := "2.13.15"
-ThisBuild / crossScalaVersions := Seq("2.13.15", "2.12.20")
-ThisBuild / organization       := "io.github.saadaouini"
-ThisBuild / organizationName   := "saadaouini"
-ThisBuild / version            := "0.1.0-SNAPSHOT"
+ThisBuild / scalaVersion            := "2.13.15"
+ThisBuild / crossScalaVersions      := Seq("2.13.15", "2.12.20")
+ThisBuild / organization            := "io.github.saadaouini"
+ThisBuild / organizationName        := "saadaouini"
+ThisBuild / dynverSonatypeSnapshots := true  // appends -SNAPSHOT for non-tagged commits
 
 Antlr4 / antlr4Version     := antlr4RuntimeVer
 Antlr4 / antlr4GenListener := false
