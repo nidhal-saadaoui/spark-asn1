@@ -66,8 +66,11 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
         case v              => v
       })
 
-    val actual = df.orderBy(sortCol).collect().map(normalise).toSeq
-    val exp    = expected.sortBy(r => r(df.schema.fieldIndex(sortCol)).asInstanceOf[Comparable[Any]])
+    val actual  = df.orderBy(sortCol).collect().map(normalise).toSeq
+    val keyIdx  = df.schema.fieldIndex(sortCol)
+    val exp     = expected.sortWith { (a, b) =>
+      a(keyIdx).asInstanceOf[Comparable[Any]].compareTo(b(keyIdx)) < 0
+    }
 
     actual.length shouldBe exp.length
     actual.zip(exp).zipWithIndex.foreach { case ((a, e), i) =>
