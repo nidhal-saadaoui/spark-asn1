@@ -1,0 +1,21 @@
+SimpleModule DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+  -- A flat SEQUENCE covering all primitive types
+  SimpleRecord ::= SEQUENCE {
+    id        INTEGER,
+    name      UTF8String,
+    active    BOOLEAN,
+    score     INTEGER (0..100),
+    data      OCTET STRING,
+    oid       OBJECT IDENTIFIER
+  }
+
+  -- An optional-fields SEQUENCE
+  PersonRecord ::= SEQUENCE {
+    firstName   UTF8String,
+    lastName    UTF8String,
+    age         INTEGER OPTIONAL,
+    email       UTF8String OPTIONAL
+  }
+
+END

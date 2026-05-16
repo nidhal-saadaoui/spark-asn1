@@ -1,0 +1,14 @@
+ChoiceModule DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+  Value ::= CHOICE {
+    intVal    INTEGER,
+    strVal    UTF8String,
+    boolVal   BOOLEAN
+  }
+
+  Wrapper ::= SEQUENCE {
+    id     INTEGER,
+    value  Value
+  }
+
+END

@@ -1,0 +1,40 @@
+# SBT
+target/
+project/target/
+project/project/
+.bsp/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# VS Code
+.vscode/
+
+# Metals (Scala LSP)
+.metals/
+.bloop/
+
+# Scala
+*.class
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+test-results/
+surefire-reports/
+
+# Assembly JARs (large, rebuilt from source)
+*-assembly-*.jar
+
+# ASN.1 index sidecar files (generated, not source)
+*.asn1idx
+
+# Docker volumes / local data (not committed)
+containerized/data/
+containerized/notebooks/

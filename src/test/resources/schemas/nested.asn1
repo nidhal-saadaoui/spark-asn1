@@ -1,0 +1,31 @@
+NestedModule DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+  -- Named BIT STRING
+  Permissions ::= BIT STRING {
+    read    (0),
+    write   (1),
+    execute (2)
+  }
+
+  -- Enumeration
+  Status ::= ENUMERATED {
+    active   (0),
+    inactive (1),
+    pending  (2)
+  }
+
+  -- Nested SEQUENCE with SEQUENCE OF
+  Tag ::= SEQUENCE {
+    key   UTF8String,
+    value UTF8String
+  }
+
+  NestedRecord ::= SEQUENCE {
+    id          INTEGER,
+    status      Status,
+    permissions Permissions,
+    tags        SEQUENCE OF Tag,
+    labels      SEQUENCE OF UTF8String
+  }
+
+END
