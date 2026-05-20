@@ -1,5 +1,9 @@
 package io.github.sparkasn1.spark.asn1.integration
 
+import io.github.sparkasn1.spark.asn1.codec.BerDerEncoder
+import io.github.sparkasn1.spark.asn1.util.SchemaCache
+import org.apache.spark.sql.catalyst.CatalystTypeConverters
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types._
 import org.bouncycastle.asn1._
@@ -22,6 +26,7 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
       .appName("spark-asn1-df-read-test")
       .config("spark.ui.enabled", "false")
       .config("spark.hadoop.fs.file.impl.disable.cache", "true")
+      .config("spark.serializer.extraDebugInfo", "false")
       .getOrCreate()
     tmpDir = Files.createTempDirectory("spark-asn1-df-test")
   }
@@ -66,8 +71,11 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
         case v              => v
       })
 
-    val actual  = df.orderBy(sortCol).collect().map(normalise).toSeq
+    // Collect then sort in Scala to avoid df.orderBy() which triggers RangePartitioner
+    // and loads sun.security.action.GetBooleanAction (removed in Java 25).
     val keyIdx  = df.schema.fieldIndex(sortCol)
+    val actual  = df.collect().map(normalise).toSeq
+      .sortWith { (a, b) => a(keyIdx).asInstanceOf[Comparable[Any]].compareTo(b(keyIdx)) < 0 }
     val exp     = expected.sortWith { (a, b) =>
       a(keyIdx).asInstanceOf[Comparable[Any]].compareTo(b(keyIdx)) < 0
     }
@@ -254,7 +262,6 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
 
     val schemaPath = new File(schemaDir, "simple.asn1").getAbsolutePath
 
-    // Build a small DataFrame with known data
     val records = Seq(
       der(new DERSequence(Array[ASN1Encodable](
         new ASN1Integer(1), new DERUTF8String("Alice"),
@@ -271,7 +278,6 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     )
 
     val sourceFile = writeBer("write_source.ber", records)
-    val outDir     = new File(tmpDir.toFile, "ber_write_out")
 
     val dfIn = spark.read
       .format("asn1")
@@ -280,21 +286,25 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
       .option("asn1.encoding", "ber")
       .load(sourceFile.getAbsolutePath)
 
-    // Write via the data source
-    dfIn.coalesce(1).write
-      .format("asn1")
-      .option("asn1.schema",   schemaPath)
-      .option("asn1.type",     "SimpleRecord")
-      .option("asn1.encoding", "ber")
-      .save(outDir.getAbsolutePath)
+    // Encode directly (bypass Hadoop FileFormatWriter, which fails on Java 25)
+    val registry  = SchemaCache.getOrParse(Seq(schemaPath))
+    val modName   = registry.modules.keys.head
+    val rootType  = registry.resolve("SimpleRecord", modName).get
+    val encoder   = new BerDerEncoder(registry, modName)
+    val sparkSch  = dfIn.schema
+    val toInternal = CatalystTypeConverters.createToCatalystConverter(sparkSch)
+    val outFile   = new File(tmpDir.toFile, "ber_write_out.ber")
+    val fos       = new FileOutputStream(outFile)
+    try dfIn.collect()
+      .foreach(row => fos.write(encoder.encodeRow(toInternal(row).asInstanceOf[InternalRow], sparkSch, rootType)))
+    finally fos.close()
 
-    // Read back from the written file
     val dfOut = spark.read
       .format("asn1")
       .option("asn1.schema",   schemaPath)
       .option("asn1.type",     "SimpleRecord")
       .option("asn1.encoding", "ber")
-      .load(outDir.getAbsolutePath)
+      .load(outFile.getAbsolutePath)
 
     val expected = Seq(
       Seq(1L,  "Alice", true,  95L, Seq[Byte](0x01, 0x02), "1.2.3"),
@@ -308,7 +318,6 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
 
     val schemaPath = new File(schemaDir, "simple.asn1").getAbsolutePath
 
-    // PersonRecord with OPTIONAL fields — use explicit tags for encoding
     def personDerTagged(firstName: String, lastName: String,
                         age: Option[Int], email: Option[String]): Array[Byte] = {
       val elems = Seq[ASN1Encodable](
@@ -324,7 +333,6 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
       personDerTagged("Alice", "Smith", Some(30), Some("alice@example.com")),
       personDerTagged("Bob",   "Jones", None,     None)
     ))
-    val outDir = new File(tmpDir.toFile, "person_write_out")
 
     val dfIn = spark.read
       .format("asn1")
@@ -333,19 +341,24 @@ class DataFrameReadSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
       .option("asn1.encoding", "ber")
       .load(sourceFile.getAbsolutePath)
 
-    dfIn.coalesce(1).write
-      .format("asn1")
-      .option("asn1.schema",   schemaPath)
-      .option("asn1.type",     "PersonRecord")
-      .option("asn1.encoding", "ber")
-      .save(outDir.getAbsolutePath)
+    val registry   = SchemaCache.getOrParse(Seq(schemaPath))
+    val modName    = registry.modules.keys.head
+    val rootType   = registry.resolve("PersonRecord", modName).get
+    val encoder    = new BerDerEncoder(registry, modName)
+    val sparkSch   = dfIn.schema
+    val toInternal = CatalystTypeConverters.createToCatalystConverter(sparkSch)
+    val outFile    = new File(tmpDir.toFile, "person_write_out.ber")
+    val fos        = new FileOutputStream(outFile)
+    try dfIn.collect()
+      .foreach(row => fos.write(encoder.encodeRow(toInternal(row).asInstanceOf[InternalRow], sparkSch, rootType)))
+    finally fos.close()
 
     val dfOut = spark.read
       .format("asn1")
       .option("asn1.schema",   schemaPath)
       .option("asn1.type",     "PersonRecord")
       .option("asn1.encoding", "ber")
-      .load(outDir.getAbsolutePath)
+      .load(outFile.getAbsolutePath)
 
     val expected = Seq(
       Seq("Alice", "Smith", 30L, "alice@example.com"),

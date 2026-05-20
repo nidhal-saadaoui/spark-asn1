@@ -24,9 +24,9 @@ class BerIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAl
       .master("local[2]")
       .appName("spark-asn1-integration-test")
       .config("spark.ui.enabled", "false")
-      // Disable Hadoop FileSystem cache for local files to avoid Subject.getSubject()
-      // incompatibility between Hadoop 3.3.x and Java 23+ (removed SecurityManager).
       .config("spark.hadoop.fs.file.impl.disable.cache", "true")
+      // sun.security.action.GetBooleanAction removed in Java 25; disable debug to avoid loading it.
+      .config("spark.serializer.extraDebugInfo", "false")
       .getOrCreate()
     tmpDir = Files.createTempDirectory("spark-asn1-test")
   }

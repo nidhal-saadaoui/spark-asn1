@@ -27,6 +27,7 @@ class OldRepoSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll {
       .appName("old-repo-spec")
       .config("spark.ui.enabled", "false")
       .config("spark.hadoop.fs.file.impl.disable.cache", "true")
+      .config("spark.serializer.extraDebugInfo", "false")
       .getOrCreate()
 
   override def afterAll(): Unit =
