@@ -196,19 +196,25 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
   }
 
   private def decodeSequenceOf(obj: ASN1Primitive, schema: Asn1SequenceOf): ArrayData = {
-    val elements = extractElements(obj, "SEQUENCE OF")
-    val elems    = elements.map {
-      case t: ASN1TaggedObject => decodeTaggedField(t, schema.elementType)
-      case e                   => decodeValue(e, schema.elementType)
+    val elements     = extractElements(obj, "SEQUENCE OF")
+    val elemResolved = resolveRefs(schema.elementType)
+    val isChoice     = elemResolved.isInstanceOf[Asn1Choice]
+    val elems = elements.map {
+      case t: ASN1TaggedObject if isChoice => decodeValue(t, schema.elementType)
+      case t: ASN1TaggedObject             => decodeTaggedField(t, schema.elementType)
+      case e                               => decodeValue(e, schema.elementType)
     }
     new GenericArrayData(elems.toArray[Any])
   }
 
   private def decodeSetOf(obj: ASN1Primitive, schema: Asn1SetOf): ArrayData = {
-    val elements = extractElements(obj, "SET OF")
-    val elems    = elements.map {
-      case t: ASN1TaggedObject => decodeTaggedField(t, schema.elementType)
-      case e                   => decodeValue(e, schema.elementType)
+    val elements     = extractElements(obj, "SET OF")
+    val elemResolved = resolveRefs(schema.elementType)
+    val isChoice     = elemResolved.isInstanceOf[Asn1Choice]
+    val elems = elements.map {
+      case t: ASN1TaggedObject if isChoice => decodeValue(t, schema.elementType)
+      case t: ASN1TaggedObject             => decodeTaggedField(t, schema.elementType)
+      case e                               => decodeValue(e, schema.elementType)
     }
     new GenericArrayData(elems.toArray[Any])
   }
