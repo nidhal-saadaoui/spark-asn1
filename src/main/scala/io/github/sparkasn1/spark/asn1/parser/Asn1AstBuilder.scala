@@ -72,7 +72,7 @@ class Asn1AstBuilder extends ASNBaseVisitor[AnyRef] {
     } else if (ctx.valueAssignment() != null) {
       val va = ctx.valueAssignment()
       val t  = visitAsnType(va.asnType())
-      val raw = va.value().getText
+      val raw = if (va.value() != null) va.value().getText else ""
       ValueAssignment(name, t, raw)
     } else {
       null // parameterizedAssignment / objectClassAssignment — skip

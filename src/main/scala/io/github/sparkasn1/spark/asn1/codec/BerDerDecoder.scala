@@ -401,17 +401,55 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
     schema: Asn1Choice
   ): (Int, Any) = {
     obj match {
-      case tagged: ASN1TaggedObject if tagged.getTagClass == BERTags.CONTEXT_SPECIFIC =>
-        val tagNo  = tagged.getTagNo
-        val altIdx = if (tagNo < schema.alternatives.size) tagNo else -1
-        if (altIdx >= 0) {
-          val alt   = schema.alternatives(altIdx)
-          val inner = tagged.getBaseObject.toASN1Primitive
-          (altIdx, decodeValue(inner, alt.asn1Type))
-        } else (-1, null)
+      case tagged: ASN1TaggedObject =>
+        val wireClass = tagged.getTagClass
+        val wireTagNo = tagged.getTagNo
+
+        // 1. Schema-tagged alternatives: find by (tagClass, tagNo)
+        val schemaTagged = schema.alternatives.zipWithIndex.find { case (alt, _) =>
+          resolveRefs(alt.asn1Type) match {
+            case tt: Asn1TaggedType =>
+              val berClass = tt.tagClass match {
+                case TagClass.ContextSpecific => BERTags.CONTEXT_SPECIFIC
+                case TagClass.Application     => BERTags.APPLICATION
+                case TagClass.Private         => BERTags.PRIVATE
+                case TagClass.Universal       => BERTags.UNIVERSAL
+              }
+              berClass == wireClass && tt.tagNumber == wireTagNo
+            case _ => false
+          }
+        }
+
+        schemaTagged match {
+          case Some((alt, idx)) =>
+            val tt    = resolveRefs(alt.asn1Type).asInstanceOf[Asn1TaggedType]
+            val inner = resolveRefs(tt.innerType)
+            val implicitForConstructed = inner match {
+              case _: Asn1Sequence | _: Asn1SequenceOf | _: Asn1Set | _: Asn1SetOf => true
+              case _ => false
+            }
+            val value = tt.tagging match {
+              case Tagging.Explicit if !implicitForConstructed =>
+                decodeValue(tagged.getBaseObject.toASN1Primitive, inner)
+              case _ =>
+                decodeValue(reinterpretImplicit(tagged, inner), inner)
+            }
+            (idx, value)
+
+          case None if wireClass == BERTags.CONTEXT_SPECIFIC =>
+            // 2. Fallback: index-based for AUTOMATIC TAGS (tagNo == fieldIndex)
+            val altIdx = if (wireTagNo < schema.alternatives.size) wireTagNo else -1
+            if (altIdx >= 0) {
+              val alt   = schema.alternatives(altIdx)
+              val inner = tagged.getBaseObject.toASN1Primitive
+              (altIdx, decodeValue(inner, alt.asn1Type))
+            } else (-1, null)
+
+          case None => (-1, null)
+        }
 
       case _ =>
-        // Untagged CHOICE: match by universal tag class
+        // Untagged CHOICE: match by universal tag
         val matched = schema.alternatives.zipWithIndex.find { case (alt, _) =>
           universalTagMatches(obj, resolveRefs(alt.asn1Type))
         }

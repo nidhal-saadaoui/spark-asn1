@@ -42,3 +42,4 @@ containerized/notebooks/
 # Local-only load tests (require locally downloaded data; not run in CI)
 src/test/scala/**/X509LoadTest.scala
 scripts/download_ct_certs.py
+src/test/scala/**/CdrfR9SmokeTest.scala
