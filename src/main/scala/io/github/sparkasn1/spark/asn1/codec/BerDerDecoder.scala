@@ -440,16 +440,22 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
             // 2. Fallback: index-based for AUTOMATIC TAGS (tagNo == fieldIndex)
             val altIdx = if (wireTagNo < schema.alternatives.size) wireTagNo else -1
             if (altIdx >= 0) {
-              val alt   = schema.alternatives(altIdx)
-              val inner = tagged.getBaseObject.toASN1Primitive
-              (altIdx, decodeValue(inner, alt.asn1Type))
+              val alt         = schema.alternatives(altIdx)
+              val altResolved = resolveRefs(alt.asn1Type)
+              // Constructed/CHOICE types can handle the full tagged object; scalars need unwrap
+              val objToPass   = altResolved match {
+                case _: Asn1Choice | _: Asn1Sequence | _: Asn1Set |
+                     _: Asn1SequenceOf | _: Asn1SetOf => tagged
+                case _                                 => tagged.getBaseObject.toASN1Primitive
+              }
+              (altIdx, decodeValue(objToPass, alt.asn1Type))
             } else (-1, null)
 
           case None => (-1, null)
         }
 
       case _ =>
-        // Untagged CHOICE: match by universal tag
+        // Untagged CHOICE: match by universal tag or recursive inner-type check
         val matched = schema.alternatives.zipWithIndex.find { case (alt, _) =>
           universalTagMatches(obj, resolveRefs(alt.asn1Type))
         }
@@ -472,6 +478,19 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
       case _: Asn1Sequence      => obj.isInstanceOf[ASN1Sequence]
       case _: Asn1Set           => obj.isInstanceOf[ASN1Set]
       case _: Asn1SequenceOf    => obj.isInstanceOf[ASN1Sequence]
+      // A CHOICE or TaggedType matches if any of its inner alternatives can match
+      case c: Asn1Choice        => c.alternatives.exists(a => universalTagMatches(obj, resolveRefs(a.asn1Type)))
+      case tt: Asn1TaggedType   => obj match {
+        case t: ASN1TaggedObject =>
+          val berClass = tt.tagClass match {
+            case TagClass.ContextSpecific => BERTags.CONTEXT_SPECIFIC
+            case TagClass.Application     => BERTags.APPLICATION
+            case TagClass.Private         => BERTags.PRIVATE
+            case TagClass.Universal       => BERTags.UNIVERSAL
+          }
+          berClass == t.getTagClass && tt.tagNumber == t.getTagNo
+        case _ => false
+      }
       case _                    => false
     }
 
