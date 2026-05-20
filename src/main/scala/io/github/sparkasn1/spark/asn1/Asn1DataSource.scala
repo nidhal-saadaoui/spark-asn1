@@ -13,6 +13,7 @@ import org.apache.hadoop.fs.{FileStatus, Path}
 import org.apache.hadoop.mapreduce.Job
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.execution.datasources.{FileFormat, OutputWriterFactory, PartitionedFile}
 import org.apache.spark.sql.sources.{DataSourceRegister, Filter}
 import org.apache.spark.sql.types.{DataType, StructField, StructType}
@@ -91,7 +92,7 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
       throw new IllegalArgumentException(
         s"Type '${opts.rootType}' not found in any of the provided schema modules"))
     val sparkType: DataType = Asn1TypeMapper.toSparkType(
-      rootType, registry, rootMod, opts.choiceTagField)
+      rootType, registry, rootMod, opts.choiceTagField, opts.enumeratedAsInt)
     sparkType match {
       case st: StructType => Some(st)
       case other =>
@@ -115,10 +116,11 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
 
     val opts = Asn1DataSourceOptions.parse(options)
 
-    val schemaPaths    = opts.schemaPaths
-    val rootTypeName   = opts.rootType
-    val encoding       = opts.encoding
-    val choiceTagField = opts.choiceTagField
+    val schemaPaths     = opts.schemaPaths
+    val rootTypeName    = opts.rootType
+    val encoding        = opts.encoding
+    val choiceTagField  = opts.choiceTagField
+    val enumeratedAsInt = opts.enumeratedAsInt
     val perFraming     = opts.perFraming match {
       case PerFraming.LengthPrefixed => "length-prefixed"
       case PerFraming.FixedLength    => "fixed-length"
@@ -153,7 +155,7 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
         // BER / DER — with optional sidecar index for splitting
         // ----------------------------------------------------------------
         case Encoding.Ber | Encoding.Der =>
-          val decoder   = new BerDerDecoder(registry, rootMod)
+          val decoder   = new BerDerDecoder(registry, rootMod, enumeratedAsInt)
           val indexPath = new Path(path.toString + Asn1Indexer.INDEX_SUFFIX)
           val hasIndex  = Try(fs.exists(indexPath)).getOrElse(false)
 
@@ -179,34 +181,38 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
         // ----------------------------------------------------------------
         case Encoding.PerAligned | Encoding.PerUnaligned =>
           val decoder = encoding match {
-            case Encoding.PerAligned => new AlignedPerDecoder(registry, rootMod)
-            case _                   => new UnalignedPerDecoder(registry, rootMod)
+            case Encoding.PerAligned => new AlignedPerDecoder(registry, rootMod, enumeratedAsInt)
+            case _                   => new UnalignedPerDecoder(registry, rootMod, enumeratedAsInt)
           }
 
-          if (perFraming == "fixed-length" && perRecordBytes > 0 && file.start > 0) {
-            val r            = perRecordBytes.toLong
-            val alignedStart = ((file.start + r - 1) / r) * r
-            val alignedEnd   = ((file.start + file.length + r - 1) / r) * r
-            val bytesToRead  = alignedEnd - alignedStart
-            if (bytesToRead <= 0) {
-              rawStream.close()
-              (Iterator.empty: Iterator[InternalRow])
+          val perBase: Iterator[InternalRow] =
+            if (perFraming == "fixed-length" && perRecordBytes > 0 && file.start > 0) {
+              val r            = perRecordBytes.toLong
+              val alignedStart = ((file.start + r - 1) / r) * r
+              val alignedEnd   = ((file.start + file.length + r - 1) / r) * r
+              val bytesToRead  = alignedEnd - alignedStart
+              if (bytesToRead <= 0) {
+                rawStream.close()
+                Iterator.empty
+              } else {
+                rawStream.seek(alignedStart)
+                new PerRecordIterator(
+                  new BoundedInputStream(rawStream, bytesToRead),
+                  decoder, rootType, perFraming, perRecordBytes)
+              }
             } else {
-              rawStream.seek(alignedStart)
-              new PerRecordIterator(
-                new BoundedInputStream(rawStream, bytesToRead),
-                decoder, rootType, perFraming, perRecordBytes)
+              new PerRecordIterator(rawStream, decoder, rootType, perFraming, perRecordBytes)
             }
-          } else {
-            new PerRecordIterator(rawStream, decoder, rootType, perFraming, perRecordBytes)
-          }
+          Asn1DataSource.projectIter(perBase, dataSchema, pruning)
 
         // ----------------------------------------------------------------
         // XER
         // ----------------------------------------------------------------
         case Encoding.Xer =>
-          val decoder = new XerDecoder(registry, rootMod)
-          new XerRecordIterator(rawStream, decoder, rootType)
+          val decoder = new XerDecoder(registry, rootMod, enumeratedAsInt)
+          Asn1DataSource.projectIter(
+            new XerRecordIterator(rawStream, decoder, rootType),
+            dataSchema, pruning)
 
         case other =>
           rawStream.close()
@@ -228,6 +234,22 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
   ): OutputWriterFactory = new Asn1OutputWriterFactory(options)
 
   override def supportBatch(sparkSession: SparkSession, dataSchema: StructType): Boolean = false
+}
+
+private object Asn1DataSource {
+  def projectIter(
+    iter: Iterator[InternalRow],
+    dataSchema: StructType,
+    pruning: Option[Seq[String]]
+  ): Iterator[InternalRow] = pruning match {
+    case None => iter
+    case Some(reqNames) =>
+      val indices = reqNames.map(n => dataSchema.fieldIndex(n))
+      iter.map { row =>
+        val values = indices.map(i => row.get(i, dataSchema(i).dataType)).toArray[Any]
+        new GenericInternalRow(values)
+      }
+  }
 }
 
 /** Limits reads to `limit` bytes; used to bound a PER fixed-length split. */

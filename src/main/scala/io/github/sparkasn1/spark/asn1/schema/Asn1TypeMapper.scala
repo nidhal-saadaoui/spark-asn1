@@ -29,14 +29,16 @@ object Asn1TypeMapper {
     t: Asn1Type,
     registry: SchemaRegistry,
     currentModule: String,
-    choiceTagField: String = ChoiceTagField
-  ): DataType = convert(t, registry, currentModule, choiceTagField)
+    choiceTagField: String  = ChoiceTagField,
+    enumeratedAsInt: Boolean = false
+  ): DataType = convert(t, registry, currentModule, choiceTagField, enumeratedAsInt)
 
   private def convert(
     t: Asn1Type,
     reg: SchemaRegistry,
     mod: String,
-    tagField: String
+    tagField: String,
+    enumAsInt: Boolean = false
   ): DataType = t match {
 
     case Asn1Boolean         => BooleanType
@@ -59,50 +61,47 @@ object Asn1TypeMapper {
           StructField(BitStringNamesField, ArrayType(StringType), nullable = false)
         ))
 
-    case e: Asn1Enumerated   => StringType
+    case _: Asn1Enumerated   => if (enumAsInt) LongType else StringType
 
     case s: Asn1Sequence =>
-      StructType(s.components.map(c => componentToField(c, reg, mod, tagField)))
+      StructType(s.components.map(c => componentToField(c, reg, mod, tagField, enumAsInt)))
 
     case s: Asn1Set =>
-      StructType(s.components.map(c => componentToField(c, reg, mod, tagField)))
+      StructType(s.components.map(c => componentToField(c, reg, mod, tagField, enumAsInt)))
 
     case s: Asn1SequenceOf =>
-      val elemType = convert(s.elementType, reg, mod, tagField)
+      val elemType = convert(s.elementType, reg, mod, tagField, enumAsInt)
       ArrayType(elemType, containsNull = true)
 
     case s: Asn1SetOf =>
-      val elemType = convert(s.elementType, reg, mod, tagField)
+      val elemType = convert(s.elementType, reg, mod, tagField, enumAsInt)
       ArrayType(elemType, containsNull = true)
 
     case c: Asn1Choice =>
       val tagField_ = StructField(tagField, StringType, nullable = false)
       val altFields = c.alternatives.map { alt =>
-        val altType = convert(alt.asn1Type, reg, mod, tagField)
+        val altType = convert(alt.asn1Type, reg, mod, tagField, enumAsInt)
         StructField(alt.name, altType, nullable = true)
       }
       StructType(tagField_ +: altFields)
 
     case tt: Asn1TaggedType =>
-      // Transparent: the tag is a wire-level annotation; the Spark type is the inner type.
-      convert(tt.innerType, reg, mod, tagField)
+      convert(tt.innerType, reg, mod, tagField, enumAsInt)
 
     case ref: Asn1TypeReference =>
       val resolved = reg.resolveRef(ref, mod)
-      if (resolved == ref)
-        // Unresolved reference — treat as binary blob
-        BinaryType
-      else
-        convert(resolved, reg, mod, tagField)
+      if (resolved == ref) BinaryType
+      else convert(resolved, reg, mod, tagField, enumAsInt)
   }
 
   private def componentToField(
     c: ComponentType,
     reg: SchemaRegistry,
     mod: String,
-    tagField: String
+    tagField: String,
+    enumAsInt: Boolean = false
   ): StructField = {
-    val sparkType = convert(c.asn1Type, reg, mod, tagField)
+    val sparkType = convert(c.asn1Type, reg, mod, tagField, enumAsInt)
     val nullable  = c.optional || c.default.isDefined
     StructField(c.name, sparkType, nullable = nullable)
   }

@@ -30,7 +30,12 @@ import org.apache.spark.unsafe.types.UTF8String
  *  - OBJECT IDENTIFIER: length-det + BER-encoded OID content bytes (dot-notation output)
  *  - Tagged types: inner type is decoded directly (tags carry no bits in PER)
  */
-class PerDecoder(registry: SchemaRegistry, moduleName: String, val aligned: Boolean) {
+class PerDecoder(
+  registry:        SchemaRegistry,
+  moduleName:      String,
+  val aligned:     Boolean,
+  enumeratedAsInt: Boolean = false
+) {
 
   /** Decode a complete record from a byte array. */
   def decodeBytes(bytes: Array[Byte], schema: Asn1Type): InternalRow = {
@@ -114,13 +119,16 @@ class PerDecoder(registry: SchemaRegistry, moduleName: String, val aligned: Bool
     result
   }
 
-  private def decodeEnumerated(buf: PerBitBuffer, schema: Asn1Enumerated): UTF8String = {
+  private def decodeEnumerated(buf: PerBitBuffer, schema: Asn1Enumerated): Any = {
     val count = schema.values.size
-    if (count == 0) return UTF8String.fromString("")
+    if (count == 0) return if (enumeratedAsInt) 0L else UTF8String.fromString("")
     if (aligned) maybeAlign(buf)
-    val idx   = buf.readBits(BitUtils.ceilLog2(count)).toInt
-    val name  = if (idx < schema.values.size) schema.values(idx).name else idx.toString
-    UTF8String.fromString(name)
+    val idx = buf.readBits(BitUtils.ceilLog2(count)).toInt
+    if (enumeratedAsInt) idx.toLong
+    else {
+      val name = if (idx < schema.values.size) schema.values(idx).name else idx.toString
+      UTF8String.fromString(name)
+    }
   }
 
   private def decodeOctetString(buf: PerBitBuffer, sizeConstraint: Option[SizeConstraint]): Array[Byte] = {

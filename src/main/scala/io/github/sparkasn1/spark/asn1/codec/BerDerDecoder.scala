@@ -22,7 +22,11 @@ import java.io.InputStream
  * align present elements with their schema components even when OPTIONAL
  * fields are absent.
  */
-class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
+class BerDerDecoder(
+  registry:        SchemaRegistry,
+  moduleName:      String,
+  enumeratedAsInt: Boolean = false
+) {
 
   /** Open a streaming parser over the given InputStream. */
   def openParser(is: InputStream): ASN1StreamParser = new ASN1StreamParser(is)
@@ -64,7 +68,7 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
     eff match {
       case s: Asn1Sequence    => decodeSequence(obj, s, requiredFields)
       case s: Asn1Set         => decodeSet(obj, s, requiredFields)
-      case c: Asn1Choice      => decodeChoice(obj, c)
+      case c: Asn1Choice      => decodeChoice(obj, c, requiredFields)
       case tt: Asn1TaggedType => new GenericInternalRow(Array[Any](decodeTaggedValue(obj, tt)))
       case _                  => new GenericInternalRow(Array[Any](decodeValue(obj, eff)))
     }
@@ -128,17 +132,20 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
     case _             => UTF8String.fromString(obj.toString)
   }
 
-  private def decodeEnumerated(obj: ASN1Primitive, schema: Asn1Enumerated): UTF8String = {
+  private def decodeEnumerated(obj: ASN1Primitive, schema: Asn1Enumerated): Any = {
     val intVal: Long = obj match {
       case e: ASN1Enumerated => e.getValue.longValue()
       case i: ASN1Integer    => i.longValueExact()
       case _                 => 0L
     }
-    val name = schema.values.find(_.value.contains(intVal))
-      .orElse(schema.values.find(_.value.isEmpty))
-      .map(_.name)
-      .getOrElse(intVal.toString)
-    UTF8String.fromString(name)
+    if (enumeratedAsInt) intVal
+    else {
+      val name = schema.values.find(_.value.contains(intVal))
+        .orElse(schema.values.find(_.value.isEmpty))
+        .map(_.name)
+        .getOrElse(intVal.toString)
+      UTF8String.fromString(name)
+    }
   }
 
   private def decodeBitString(obj: ASN1Primitive, schema: Asn1BitString): Any = {
@@ -393,13 +400,28 @@ class BerDerDecoder(registry: SchemaRegistry, moduleName: String) {
   // CHOICE decoder
   // -----------------------------------------------------------------------
 
-  private def decodeChoice(obj: ASN1Primitive, schema: Asn1Choice): InternalRow = {
+  private def decodeChoice(
+    obj:            ASN1Primitive,
+    schema:         Asn1Choice,
+    requiredFields: Option[Seq[String]] = None
+  ): InternalRow = {
     val (altIdx, altValue) = matchChoiceAlternative(obj, schema)
-    val fields             = new Array[Any](1 + schema.alternatives.size)
     val altName            = if (altIdx >= 0) schema.alternatives(altIdx).name else "unknown"
-    fields(0)              = UTF8String.fromString(altName)
-    if (altIdx >= 0) fields(altIdx + 1) = altValue
-    new GenericInternalRow(fields)
+    requiredFields match {
+      case None =>
+        val fields = new Array[Any](1 + schema.alternatives.size)
+        fields(0) = UTF8String.fromString(altName)
+        if (altIdx >= 0) fields(altIdx + 1) = altValue
+        new GenericInternalRow(fields)
+      case Some(reqNames) =>
+        val result = reqNames.map {
+          case "_tag" => UTF8String.fromString(altName)
+          case n =>
+            val altI = schema.alternatives.indexWhere(_.name == n)
+            if (altI >= 0 && altI == altIdx) altValue else null
+        }
+        new GenericInternalRow(result.toArray[Any])
+    }
   }
 
   private def matchChoiceAlternative(

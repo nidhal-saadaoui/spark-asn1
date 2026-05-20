@@ -19,6 +19,11 @@ lazy val root = (project in file("."))
   .settings(
     name := "spark-asn1",
 
+    // Target Java 11 so sbt-assembly's ASM can shade generated ANTLR4 bytecode.
+    // Spark 3.5 itself targets Java 11, so this is the right compatibility floor.
+    javacOptions  ++= Seq("--release", "11"),
+    scalacOptions ++= Seq("-release", "11"),
+
     libraryDependencies ++= Seq(
       "org.apache.spark"  %% "spark-sql"      % sparkVersion  % Provided,
       "org.apache.spark"  %% "spark-core"     % sparkVersion  % Provided,
@@ -59,7 +64,8 @@ lazy val root = (project in file("."))
       "--add-opens=java.base/sun.security.action=ALL-UNNAMED",
       "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED",
       "--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED",
-      "--add-opens=java.base/javax.security.auth=ALL-UNNAMED"
+      "--add-opens=java.base/javax.security.auth=ALL-UNNAMED",
+      "-Djdk.security.auth.subject.useTL=true"
     ),
     Test / envVars := Map(
       "SPARK_USER"        -> sys.props.getOrElse("user.name", "spark-test"),

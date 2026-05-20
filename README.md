@@ -183,7 +183,7 @@ PER streams do not self-delimit records, so a framing strategy is required:
 ```bash
 git clone https://github.com/saadaouini/spark-asn1.git
 cd spark-asn1
-sbt test          # run all 78 tests
+sbt test          # run all 112 tests
 sbt assembly      # build a shaded fat JAR
 ```
 
@@ -452,9 +452,23 @@ spark.read
   .load("/data/huge.per")   // automatically split across executors
 ```
 
+## Write support
+
+Write back to ASN.1 files using `df.write`:
+
+```scala
+df.write
+  .format("asn1")
+  .option("asn1.schema",   "person.asn1")
+  .option("asn1.type",     "Person")
+  .option("asn1.encoding", "ber")
+  .save("/output/people.ber")
+```
+
+PER write supports the same framing options as read (`length-prefixed`, `fixed-length`, `hex-lines`).
+
 ## Limitations
 
-- Write support is not yet implemented.
 - PER extension additions (extension markers with unknown extensions) are skipped silently.
 - Automatic tagging and explicit/implicit tag resolution are supported for BER/DER; PER and XER ignore tags by design per the standards.
 - Indefinite-length BER files cannot be indexed and remain single-task reads.

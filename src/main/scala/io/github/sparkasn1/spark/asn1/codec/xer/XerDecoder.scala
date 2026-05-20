@@ -33,7 +33,11 @@ import java.io.StringReader
  *  - CHOICE            → single child element whose tag names the active alternative
  *  - Tagged types      → inner type decoded (tags invisible in XER)
  */
-class XerDecoder(registry: SchemaRegistry, moduleName: String) {
+class XerDecoder(
+  registry:        SchemaRegistry,
+  moduleName:      String,
+  enumeratedAsInt: Boolean = false
+) {
 
   private val factory: XMLInputFactory = {
     val f = XMLInputFactory.newInstance()
@@ -123,23 +127,23 @@ class XerDecoder(registry: SchemaRegistry, moduleName: String) {
     reader: javax.xml.stream.XMLEventReader,
     start: StartElement,
     schema: Asn1Enumerated
-  ): UTF8String = {
-    // XER ENUMERATED: <EnumTypeName><symbolName/></EnumTypeName>
-    // The inner element's tag name is the symbolic name.
-    // Skip whitespace characters, find the inner StartElement.
+  ): Any = {
     var name = ""
     var done = false
     while (reader.hasNext && !done) {
       val evt = reader.nextEvent()
       if (evt.isStartElement) {
         name = evt.asStartElement().getName.getLocalPart
-        // consume the inner element's end tag
         consumeUntilEndElement(reader, 1)
       } else if (evt.isEndElement) {
         done = true
       }
     }
-    UTF8String.fromString(name)
+    if (enumeratedAsInt) {
+      schema.values.find(_.name == name).flatMap(_.value).getOrElse(0L)
+    } else {
+      UTF8String.fromString(name)
+    }
   }
 
   private def decodeBitStringElement(
