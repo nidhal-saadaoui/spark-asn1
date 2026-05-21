@@ -116,7 +116,7 @@ class PerEncoder(
     }
 
   private def encodeUnconstrained(buf: PerBitOutput, value: Long): Unit = {
-    buf.align()
+    if (aligned) buf.align()
     val bytes = longToMinimalBytes(value)
     writeLengthDet(buf, bytes.length)
     buf.writeBytes(bytes)
@@ -147,7 +147,7 @@ class PerEncoder(
       case Some(SizeConstraint(min, max)) if min == max => ()  // fixed size: no length field
       case c => writeConstrainedLen(buf, bytes.length.toLong * 8, c)
     }
-    buf.align()
+    if (aligned) buf.align()
     bytes.foreach(b => buf.writeBits(b & 0xff, 8))
   }
 
@@ -206,7 +206,7 @@ class PerEncoder(
   // -------------------------------------------------------------------------
 
   private def writeLengthDet(buf: PerBitOutput, len: Int): Unit = {
-    buf.align()
+    if (aligned) buf.align()
     if (len <= 127) {
       buf.writeBits(len.toLong, 8)
     } else if (len <= 16383) {

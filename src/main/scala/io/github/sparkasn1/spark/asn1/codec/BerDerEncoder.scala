@@ -114,6 +114,9 @@ class BerDerEncoder(
   // Constructed type encoders
   // -------------------------------------------------------------------------
 
+  private val autoTags: Boolean =
+    registry.modules.get(moduleName).exists(_.tagDefault == TagDefault.Automatic)
+
   private def encodeSequenceComponents(
     row:        InternalRow,
     st:         StructType,
@@ -121,13 +124,20 @@ class BerDerEncoder(
     isSet:      Boolean
   ): ASN1Primitive = {
     val vec = new ASN1EncodableVector()
-    components.foreach { comp =>
+    components.zipWithIndex.foreach { case (comp, compIdx) =>
       val fieldIdx = Try(st.fieldIndex(comp.name)).getOrElse(-1)
       if (fieldIdx >= 0) {
         val field = st(fieldIdx)
         val v     = row.get(fieldIdx, field.dataType)
         if (v != null || !comp.optional) {
-          vec.add(encodeValue(v, field.dataType, comp.asn1Type))
+          val encoded = encodeValue(v, field.dataType, comp.asn1Type)
+          if (autoTags) {
+            // CHOICE has no universal tag, so per X.680 it needs EXPLICIT tagging;
+            // all other types use IMPLICIT tagging.
+            val needsExplicit = resolveRefs(comp.asn1Type).isInstanceOf[Asn1Choice]
+            vec.add(new DERTaggedObject(needsExplicit, compIdx, encoded))
+          } else
+            vec.add(encoded)
         }
         // null + optional → omit (absent OPTIONAL)
       }

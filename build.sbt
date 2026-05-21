@@ -29,9 +29,11 @@ lazy val root = (project in file("."))
       "org.apache.spark"  %% "spark-core"     % sparkVersion  % Provided,
       "org.bouncycastle"  %  "bcprov-jdk18on" % bouncyCastleVer,
       "org.antlr"         %  "antlr4-runtime" % antlr4RuntimeVer,
-      "org.scalatest"     %% "scalatest"      % scalaTestVersion % Test,
-      "org.apache.spark"  %% "spark-sql"      % sparkVersion  % Test,
-      "org.apache.spark"  %% "spark-core"     % sparkVersion  % Test,
+      "org.scalatest"     %% "scalatest"         % scalaTestVersion  % Test,
+      "org.scalatestplus" %% "scalacheck-1-17"  % "3.2.17.0"        % Test,
+      "org.scalacheck"    %% "scalacheck"        % "1.17.1"          % Test,
+      "org.apache.spark"  %% "spark-sql"         % sparkVersion      % Test,
+      "org.apache.spark"  %% "spark-core"        % sparkVersion      % Test,
     ),
 
     // Shade BouncyCastle and ANTLR4 to avoid classpath conflicts on clusters
