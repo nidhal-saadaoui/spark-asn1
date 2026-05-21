@@ -5,7 +5,7 @@ val scalaTestVersion  = "3.2.17"
 
 ThisBuild / scalaVersion            := "2.13.15"
 ThisBuild / crossScalaVersions      := Seq("2.13.15", "2.12.20")
-ThisBuild / organization            := "io.github.saadaouini"
+ThisBuild / organization            := "io.github.nidhal-saadaoui"
 ThisBuild / organizationName        := "saadaouini"
 ThisBuild / dynverSonatypeSnapshots := true  // appends -SNAPSHOT for non-tagged commits
 
@@ -80,18 +80,18 @@ lazy val root = (project in file("."))
     usePgpKeyHex("5D4E47CFFB9C4CE1"),
 
     licenses := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0")),
-    homepage := Some(url("https://github.com/saadaouini/spark-asn1")),
+    homepage := Some(url("https://github.com/nidhal-saadaoui/spark-asn1")),
     description := "Apache Spark data source for ASN.1-encoded files (BER, DER, PER, XER), schema-driven without code generation",
     scmInfo := Some(ScmInfo(
-      url("https://github.com/saadaouini/spark-asn1"),
-      "scm:git:git://github.com/saadaouini/spark-asn1.git",
-      Some("scm:git:ssh://github.com/saadaouini/spark-asn1.git")
+      url("https://github.com/nidhal-saadaoui/spark-asn1"),
+      "scm:git:git://github.com/nidhal-saadaoui/spark-asn1.git",
+      Some("scm:git:ssh://github.com/nidhal-saadaoui/spark-asn1.git")
     )),
     developers := List(Developer(
       id    = "saadaouini",
       name  = "Nidhal Saadaoui",
       email = "nidhal.saadaoui.1993@gmail.com",
-      url   = url("https://github.com/saadaouini")
+      url   = url("https://github.com/nidhal-saadaoui")
     )),
 
     pgpPassphrase := sys.env.get("PGP_PASSPHRASE").map(_.toCharArray)
