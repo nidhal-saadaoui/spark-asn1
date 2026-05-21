@@ -76,7 +76,8 @@ lazy val root = (project in file("."))
 
     publishMavenStyle      := true,
     publishTo              := sonatypePublishToBundle.value,
-    sonatypeCredentialHost := "oss.sonatype.org",
+    sonatypeCredentialHost := "central.sonatype.com",
+    usePgpKeyHex           := "5D4E47CFFB9C4CE1",
 
     licenses := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0")),
     homepage := Some(url("https://github.com/saadaouini/spark-asn1")),
@@ -93,7 +94,5 @@ lazy val root = (project in file("."))
       url   = url("https://github.com/saadaouini")
     )),
 
-    // GPG signing: set PGP_SECRET / PGP_PASSPHRASE env vars in CI, or use
-    // ~/.sbt/1.0/sonatype.sbt for local credentials.
-    // pgpPassphrase := sys.env.get("PGP_PASSPHRASE").map(_.toCharArray)
+    pgpPassphrase := sys.env.get("PGP_PASSPHRASE").map(_.toCharArray)
   )

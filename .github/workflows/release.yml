@@ -7,24 +7,20 @@ on:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Run tests + build assembly JAR for each Scala version
+  # Run tests in parallel for both Scala versions
   # -------------------------------------------------------------------------
-  build:
-    name: Build (Scala ${{ matrix.scalaBin }})
+  test:
+    name: Test (Scala ${{ matrix.scala }})
     runs-on: ubuntu-latest
-
     strategy:
+      fail-fast: true
       matrix:
-        include:
-          - scala: "2.13.15"
-            scalaBin: "2.13"
-          - scala: "2.12.20"
-            scalaBin: "2.12"
+        scala: ["2.13.15", "2.12.20"]
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # dynver needs full tag history to compute version
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -56,46 +52,55 @@ jobs:
             --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED
         run: sbt ++${{ matrix.scala }} test
 
-      - name: Build assembly JAR
-        run: sbt ++${{ matrix.scala }} assembly
-
-      - name: Upload assembly JAR
-        uses: actions/upload-artifact@v4
-        with:
-          name: jar-scala-${{ matrix.scalaBin }}
-          path: target/scala-${{ matrix.scalaBin }}/spark-asn1-*-assembly.jar
-          if-no-files-found: error
-
   # -------------------------------------------------------------------------
-  # Collect both JARs and publish the GitHub Release
+  # Publish to Maven Central + create GitHub Release (runs after both tests pass)
   # -------------------------------------------------------------------------
-  release:
-    name: Create GitHub Release
-    needs: build
+  publish:
+    name: Publish & Release
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download Scala 2.13 JAR
-        uses: actions/download-artifact@v4
         with:
-          name: jar-scala-2.13
-          path: jars/
+          fetch-depth: 0  # dynver needs full tag history
 
-      - name: Download Scala 2.12 JAR
-        uses: actions/download-artifact@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          name: jar-scala-2.12
-          path: jars/
+          java-version: "17"
+          distribution: temurin
+          cache: sbt
 
-      - name: Create release and attach JARs
+      - name: Install sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Import GPG signing key
+        run: echo "$PGP_SECRET" | base64 --decode | gpg --import --batch
+        env:
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+
+      # sbt +publishSigned cross-publishes for all versions in crossScalaVersions,
+      # then sonatypeBundleRelease uploads and releases the bundle in one shot.
+      - name: Publish to Maven Central
+        run: sbt +publishSigned sonatypeBundleRelease
+        env:
+          PGP_PASSPHRASE:      ${{ secrets.PGP_PASSPHRASE }}
+          SONATYPE_USERNAME:   ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_PASSWORD:   ${{ secrets.SONATYPE_PASSWORD }}
+
+      # Build shaded assembly JARs for both Scala versions to attach to the GitHub Release
+      - name: Build assembly JARs
+        run: sbt +assembly
+
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "spark-asn1 ${{ github.ref_name }}" \
             --generate-notes \
-            jars/*.jar
+            target/scala-2.13/spark-asn1-*-assembly.jar \
+            target/scala-2.12/spark-asn1-*-assembly.jar
