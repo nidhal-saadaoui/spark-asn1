@@ -77,7 +77,7 @@ lazy val root = (project in file("."))
     publishMavenStyle      := true,
     publishTo              := sonatypePublishToBundle.value,
     sonatypeCredentialHost := "central.sonatype.com",
-    usePgpKeyHex           := "5D4E47CFFB9C4CE1",
+    usePgpKeyHex("5D4E47CFFB9C4CE1"),
 
     licenses := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0")),
     homepage := Some(url("https://github.com/saadaouini/spark-asn1")),
