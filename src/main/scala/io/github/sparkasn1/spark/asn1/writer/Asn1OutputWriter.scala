@@ -12,6 +12,8 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.execution.datasources.{OutputWriter, OutputWriterFactory}
 import org.apache.spark.sql.types.StructType
 
+import java.io.OutputStream
+
 /**
  * OutputWriterFactory for ASN.1 BER/DER output.
  * One instance is created on the driver in `prepareWrite` and serialized to executors.
@@ -34,6 +36,20 @@ class Asn1OutputWriterFactory(options: Map[String, String]) extends OutputWriter
     dataSchema: StructType,
     context:    TaskAttemptContext
   ): OutputWriter = {
+    val conf = context.getConfiguration
+    val out  = new Path(path).getFileSystem(conf).create(new Path(path))
+    newInstanceFromStream(path, dataSchema, out)
+  }
+
+  /**
+   * Create an OutputWriter that writes to an existing OutputStream.
+   * Used in tests to bypass Hadoop FileSystem (incompatible with Java 25+).
+   */
+  def newInstanceFromStream(
+    path:       String,
+    dataSchema: StructType,
+    out:        OutputStream
+  ): OutputWriter = {
     val opts     = Asn1DataSourceOptions.parse(options)
     val registry = SchemaCache.getOrParse(opts.schemaPaths)
     val rootMod  = registry.modules.keys.headOption.getOrElse(
@@ -44,9 +60,6 @@ class Asn1OutputWriterFactory(options: Map[String, String]) extends OutputWriter
     opts.encoding match {
       case Encoding.Ber | Encoding.Der =>
         val encoder = new BerDerEncoder(registry, rootMod, opts.choiceTagField)
-        val conf    = context.getConfiguration
-        val fs      = new Path(path).getFileSystem(conf)
-        val out     = fs.create(new Path(path))
         new BerOutputWriter(path, dataSchema, rootType, encoder, out)
 
       case Encoding.PerAligned | Encoding.PerUnaligned =>
@@ -54,17 +67,10 @@ class Asn1OutputWriterFactory(options: Map[String, String]) extends OutputWriter
           case Encoding.PerAligned => new AlignedPerEncoder(registry, rootMod, opts.choiceTagField)
           case _                   => new UnalignedPerEncoder(registry, rootMod, opts.choiceTagField)
         }
-        val framing = opts.perFraming
-        val conf = context.getConfiguration
-        val fs   = new Path(path).getFileSystem(conf)
-        val out  = fs.create(new Path(path))
-        new PerOutputWriter(path, dataSchema, rootType, encoder, out, framing)
+        new PerOutputWriter(path, dataSchema, rootType, encoder, out, opts.perFraming)
 
       case Encoding.Xer =>
         val encoder = new XerEncoder(registry, rootMod, opts.choiceTagField)
-        val conf = context.getConfiguration
-        val fs   = new Path(path).getFileSystem(conf)
-        val out  = fs.create(new Path(path))
         new XerOutputWriter(path, dataSchema, rootType, encoder, opts.rootType, out)
     }
   }
@@ -76,7 +82,7 @@ private class BerOutputWriter(
   schema:     StructType,
   rootType:   io.github.sparkasn1.spark.asn1.model.Asn1Type,
   encoder:    BerDerEncoder,
-  out:        org.apache.hadoop.fs.FSDataOutputStream
+  out:        OutputStream
 ) extends OutputWriter {
 
   override def write(row: InternalRow): Unit =
@@ -87,15 +93,17 @@ private class BerOutputWriter(
 }
 
 /**
- * Writes PER records with length-prefixed framing (4-byte big-endian length + payload).
- * Other framings (fixed-length, hex-lines) are not supported for write.
+ * Writes PER records. Framing options:
+ *   length-prefixed (default): 4-byte big-endian length + payload
+ *   fixed-length: raw bytes
+ *   hex-lines: hex-encoded payload + newline
  */
 private class PerOutputWriter(
   val path:   String,
   schema:     StructType,
   rootType:   io.github.sparkasn1.spark.asn1.model.Asn1Type,
   encoder:    io.github.sparkasn1.spark.asn1.codec.per.PerEncoder,
-  out:        org.apache.hadoop.fs.FSDataOutputStream,
+  out:        OutputStream,
   framing:    PerFraming
 ) extends OutputWriter {
 
@@ -130,7 +138,7 @@ private class XerOutputWriter(
   rootType:   io.github.sparkasn1.spark.asn1.model.Asn1Type,
   encoder:    XerEncoder,
   rootTag:    String,
-  out:        org.apache.hadoop.fs.FSDataOutputStream
+  out:        OutputStream
 ) extends OutputWriter {
 
   override def write(row: InternalRow): Unit =
