@@ -40,16 +40,19 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   private val simpleReg = SchemaCache.getOrParse(Seq(new File(schemaDir, "simple.asn1").getAbsolutePath))
   private val nestedReg = SchemaCache.getOrParse(Seq(new File(schemaDir, "nested.asn1").getAbsolutePath))
   private val choiceReg = SchemaCache.getOrParse(Seq(new File(schemaDir, "choice.asn1").getAbsolutePath))
+  private val realReg   = SchemaCache.getOrParse(Seq(new File(schemaDir, "real.asn1").getAbsolutePath))
 
-  private val simpleAsn1  = simpleReg.resolve("SimpleRecord", "SimpleModule").get
-  private val personAsn1  = simpleReg.resolve("PersonRecord", "SimpleModule").get
-  private val nestedAsn1  = nestedReg.resolve("NestedRecord", "NestedModule").get
-  private val wrapperAsn1 = choiceReg.resolve("Wrapper",      "ChoiceModule").get
+  private val simpleAsn1      = simpleReg.resolve("SimpleRecord",  "SimpleModule").get
+  private val personAsn1      = simpleReg.resolve("PersonRecord",  "SimpleModule").get
+  private val nestedAsn1      = nestedReg.resolve("NestedRecord",  "NestedModule").get
+  private val wrapperAsn1     = choiceReg.resolve("Wrapper",       "ChoiceModule").get
+  private val measurementAsn1 = realReg  .resolve("Measurement",   "RealModule"  ).get
 
-  private val simpleSchema  = Asn1TypeMapper.toSparkType(simpleAsn1,  simpleReg, "SimpleModule").asInstanceOf[StructType]
-  private val personSchema  = Asn1TypeMapper.toSparkType(personAsn1,  simpleReg, "SimpleModule").asInstanceOf[StructType]
-  private val nestedSchema  = Asn1TypeMapper.toSparkType(nestedAsn1,  nestedReg, "NestedModule").asInstanceOf[StructType]
-  private val wrapperSchema = Asn1TypeMapper.toSparkType(wrapperAsn1, choiceReg, "ChoiceModule").asInstanceOf[StructType]
+  private val simpleSchema      = Asn1TypeMapper.toSparkType(simpleAsn1,      simpleReg, "SimpleModule").asInstanceOf[StructType]
+  private val personSchema      = Asn1TypeMapper.toSparkType(personAsn1,      simpleReg, "SimpleModule").asInstanceOf[StructType]
+  private val nestedSchema      = Asn1TypeMapper.toSparkType(nestedAsn1,      nestedReg, "NestedModule").asInstanceOf[StructType]
+  private val wrapperSchema     = Asn1TypeMapper.toSparkType(wrapperAsn1,     choiceReg, "ChoiceModule").asInstanceOf[StructType]
+  private val measurementSchema = Asn1TypeMapper.toSparkType(measurementAsn1, realReg,   "RealModule"  ).asInstanceOf[StructType]
 
   // --------------------------------------------------------------------------
   // Generators
@@ -140,6 +143,25 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
     id    <- Gen.choose(-1000000L, 1000000L)
     value <- genValueRow
   } yield new GenericInternalRow(Array[Any](id, value))
+
+  // REAL generator: finite doubles + ±∞. NaN excluded (NaN ≠ NaN breaks ==).
+  // -0.0 is included: BerRealUtil encodes it as 0.0, but -0.0 == 0.0 in IEEE.
+  private val genDouble: Gen[Double] = Gen.frequency(
+    3  -> Gen.const(Double.PositiveInfinity),
+    3  -> Gen.const(Double.NegativeInfinity),
+    4  -> Gen.const(0.0),
+    45 -> Gen.choose(-1.0e15, 1.0e15),
+    45 -> Gen.choose(-1.0e-10, 1.0e-10)   // small values, exercises subnormal path
+  )
+
+  // Measurement: id INTEGER, value REAL, label UTF8String
+  private val genMeasurementRow: Gen[InternalRow] = for {
+    id    <- Gen.choose(-100000L, 100000L)
+    value <- genDouble
+    label <- Gen.alphaNumStr
+  } yield new GenericInternalRow(Array[Any](
+    id, value, UTF8String.fromString(label)
+  ))
 
   // --------------------------------------------------------------------------
   // Structural equality (handles UTF8String, Array[Byte], ArrayData, InternalRow)
@@ -297,6 +319,34 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   it should "hold for Wrapper (CHOICE)" in {
     forAll(genWrapperRow) { row =>
       xerRoundTrip(choiceReg, "ChoiceModule", "Wrapper")(row, wrapperSchema, wrapperAsn1)
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // REAL type — all four codecs
+  // --------------------------------------------------------------------------
+
+  "BER round-trip" should "hold for Measurement (REAL)" in {
+    forAll(genMeasurementRow) { row =>
+      berRoundTrip(realReg, "RealModule")(row, measurementSchema, measurementAsn1)
+    }
+  }
+
+  "APER round-trip" should "hold for Measurement (REAL)" in {
+    forAll(genMeasurementRow) { row =>
+      aperRoundTrip(realReg, "RealModule")(row, measurementSchema, measurementAsn1)
+    }
+  }
+
+  "UPER round-trip" should "hold for Measurement (REAL)" in {
+    forAll(genMeasurementRow) { row =>
+      uperRoundTrip(realReg, "RealModule")(row, measurementSchema, measurementAsn1)
+    }
+  }
+
+  "XER round-trip" should "hold for Measurement (REAL)" in {
+    forAll(genMeasurementRow) { row =>
+      xerRoundTrip(realReg, "RealModule", "Measurement")(row, measurementSchema, measurementAsn1)
     }
   }
 }
