@@ -191,7 +191,7 @@ PER streams do not self-delimit records, so a framing strategy is required:
 ```bash
 git clone https://github.com/nidhal-saadaoui/spark-asn1.git
 cd spark-asn1
-sbt test          # run all 117 tests
+sbt test          # run all 156 tests
 sbt assembly      # build a shaded fat JAR
 ```
 
@@ -431,6 +431,41 @@ docker-compose exec spark-master \
 
 After the index job completes, reads of the same `*.ber` files are automatically parallelised across HDFS blocks.
 
+## Structured Streaming
+
+spark-asn1 works as a Spark Structured Streaming source. New files that arrive in the watched directory are picked up automatically.
+
+```scala
+val stream = spark.readStream
+  .format("asn1")
+  .option("asn1.schema",   "cdr.asn1")
+  .option("asn1.type",     "CDR")
+  .option("asn1.encoding", "ber")
+  .load("/data/incoming/")
+
+val query = stream
+  .writeStream
+  .format("parquet")
+  .option("checkpointLocation", "/data/checkpoint/")
+  .option("path",               "/data/output/")
+  .trigger(org.apache.spark.sql.streaming.Trigger.ProcessingTime("30 seconds"))
+  .start()
+
+query.awaitTermination()
+```
+
+Files processed in previous batches are tracked by Spark's checkpoint mechanism and are not re-read.
+
+> **Java 21+ note**: On Java 21 and later, the default checkpoint manager calls a removed API (`Subject.getSubject()`).
+> If you see a related warning or error, switch to the file-system based manager:
+>
+> ```scala
+> spark.conf.set(
+>   "spark.hadoop.spark.sql.streaming.checkpointFileManagerClass",
+>   "org.apache.spark.sql.execution.streaming.FileSystemBasedCheckpointFileManager"
+> )
+> ```
+
 ## Architecture
 
 ```
@@ -445,6 +480,8 @@ Asn1DataSource (FileFormat)
 ```
 
 The schema is parsed once per executor and cached in a thread-safe executor-local map (`SchemaCache`), so the parse cost is paid only once per task slot.
+
+BER/DER decoding reads one raw TLV frame at a time, patches any REAL (tag 9) elements before handing bytes to BouncyCastle, and supports both definite-length and indefinite-length BER constructions.
 
 ## Splitting large files
 
