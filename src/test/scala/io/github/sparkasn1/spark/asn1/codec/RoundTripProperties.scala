@@ -60,7 +60,7 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   // SimpleRecord: id INTEGER, name UTF8String, active BOOLEAN,
   //               score INTEGER(0..100), data OCTET STRING, oid OBJECT IDENTIFIER
   private val genSimpleRow: Gen[InternalRow] = for {
-    id     <- Gen.choose(-1_000_000L, 1_000_000L)
+    id     <- Gen.choose(-1000000L, 1000000L)
     name   <- Gen.alphaNumStr.suchThat(_.nonEmpty)
     active <- Gen.oneOf(true, false)
     score  <- Gen.choose(0L, 100L)
@@ -110,7 +110,7 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   // NestedRecord: id INTEGER, status ENUMERATED, permissions Permissions,
   //               tags SEQUENCE OF Tag, labels SEQUENCE OF UTF8String
   private val genNestedRow: Gen[InternalRow] = for {
-    id      <- Gen.choose(-1_000_000L, 1_000_000L)
+    id      <- Gen.choose(-1000000L, 1000000L)
     status  <- Gen.oneOf("active", "inactive", "pending")
     perms   <- genPermissionsRow
     tags    <- Gen.listOf(genTagRow).map(lst => new GenericArrayData(lst.toArray[Any]))
@@ -124,7 +124,7 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   // Value ::= CHOICE { intVal INTEGER, strVal UTF8String, boolVal BOOLEAN }
   // Spark: StructType(_tag, intVal nullable, strVal nullable, boolVal nullable)
   private val genValueRow: Gen[InternalRow] = Gen.oneOf(
-    Gen.choose(-1_000_000L, 1_000_000L).map { n =>
+    Gen.choose(-1000000L, 1000000L).map { n =>
       new GenericInternalRow(Array[Any](UTF8String.fromString("intVal"), n, null, null))
     },
     Gen.alphaNumStr.map { s =>
@@ -137,7 +137,7 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
 
   // Wrapper: id INTEGER, value Value(CHOICE)
   private val genWrapperRow: Gen[InternalRow] = for {
-    id    <- Gen.choose(-1_000_000L, 1_000_000L)
+    id    <- Gen.choose(-1000000L, 1000000L)
     value <- genValueRow
   } yield new GenericInternalRow(Array[Any](id, value))
 
