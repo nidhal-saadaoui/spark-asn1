@@ -171,4 +171,47 @@ class Asn1SchemaParserSpec extends AnyFlatSpec with Matchers {
     val m    = Asn1SchemaParser.parseFile(path)
     m.typeAssignments.keys should contain allOf("NestedRecord", "Status", "Permissions", "Tag")
   }
+
+  // -------------------------------------------------------------------------
+  // Parse error reporting
+  // -------------------------------------------------------------------------
+
+  it should "throw Asn1SchemaException with line number on a syntax error" in {
+    val ex = intercept[Asn1SchemaException] {
+      parse("""
+        BadModule DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+          Broken ::= SEQUENCE {
+            id @@@INVALID@@@ INTEGER
+          }
+        END
+      """)
+    }
+    ex.getMessage should include ("syntax error")
+    // Line 4 is where the bad token is
+    ex.getMessage should include (":4:")
+    // The offending token should be mentioned
+    ex.getMessage should include ("@")
+  }
+
+  it should "report multiple syntax errors in one exception" in {
+    val ex = intercept[Asn1SchemaException] {
+      parse("""
+        MultiErrorModule DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+          A ::= @@@
+          B ::= @@@
+        END
+      """)
+    }
+    ex.getMessage should include ("syntax error")
+    // Both bad lines should be mentioned
+    ex.getMessage should include (":3:")
+    ex.getMessage should include (":4:")
+  }
+
+  it should "throw Asn1SchemaException with source name for parseString" in {
+    val ex = intercept[Asn1SchemaException] {
+      Asn1SchemaParser.parseString("!!! not valid asn1 !!!", "my-schema.asn1")
+    }
+    ex.getMessage should include ("my-schema.asn1")
+  }
 }
