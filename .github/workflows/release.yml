@@ -102,5 +102,5 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             --title "spark-asn1 ${{ github.ref_name }}" \
             --generate-notes \
-            target/scala-2.13/spark-asn1-*-assembly.jar \
-            target/scala-2.12/spark-asn1-*-assembly.jar
+            target/scala-2.13/spark-asn1_2.13-*-assembly.jar \
+            target/scala-2.12/spark-asn1_2.12-*-assembly.jar
