@@ -105,6 +105,9 @@ class BerDerEncoder(
       case c: Asn1Choice =>
         encodeChoice(value.asInstanceOf[InternalRow], sparkType.asInstanceOf[StructType], c)
 
+      case Asn1Any =>
+        new DEROctetString(value.asInstanceOf[Array[Byte]])
+
       case _ =>
         new DEROctetString(Array.empty[Byte])
     }

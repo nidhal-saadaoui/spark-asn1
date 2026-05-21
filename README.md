@@ -22,16 +22,21 @@ Supply a `.asn1` schema file and a root type name; spark-asn1 parses the schema 
 
 **SBT**
 ```scala
-libraryDependencies += "io.github.saadaouini" %% "spark-asn1" % "0.1.0"
+libraryDependencies += "io.github.nidhal-saadaoui" %% "spark-asn1" % "0.1.3"
 ```
 
 **Maven**
 ```xml
 <dependency>
-  <groupId>io.github.saadaouini</groupId>
+  <groupId>io.github.nidhal-saadaoui</groupId>
   <artifactId>spark-asn1_2.13</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.3</version>
 </dependency>
+```
+
+**Gradle**
+```groovy
+implementation 'io.github.nidhal-saadaoui:spark-asn1_2.13:0.1.3'
 ```
 
 > spark-asn1 shades BouncyCastle and ANTLR4 internally, so there are no classpath conflicts on Spark clusters.
@@ -70,6 +75,7 @@ df.show()
 | NULL | NullType | |
 | INTEGER | LongType | Always Long; cast down if needed |
 | OCTET STRING | BinaryType | |
+| ANY | BinaryType | Raw DER bytes |
 | BIT STRING (unnamed) | BinaryType | Padding bits dropped |
 | BIT STRING (named) | StructType(`_bytes` Binary, `_namedBits` Array[String]) | `_namedBits` lists the names of the set bits |
 | All string types | StringType | UTF8String, PrintableString, IA5String, etc. |
@@ -181,9 +187,9 @@ PER streams do not self-delimit records, so a framing strategy is required:
 ## Building from source
 
 ```bash
-git clone https://github.com/saadaouini/spark-asn1.git
+git clone https://github.com/nidhal-saadaoui/spark-asn1.git
 cd spark-asn1
-sbt test          # run all 112 tests
+sbt test          # run all 117 tests
 sbt assembly      # build a shaded fat JAR
 ```
 
@@ -192,6 +198,36 @@ Cross-build for both Scala versions:
 sbt +compile
 sbt +test
 ```
+
+## PySpark — standalone spark-submit
+
+No cluster needed. Download the assembly JAR from the [GitHub Releases](https://github.com/nidhal-saadaoui/spark-asn1/releases) page and pass it with `--jars`:
+
+```python
+# read_ber.py
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("asn1").getOrCreate()
+
+df = (spark.read
+    .format("asn1")
+    .option("asn1.schema",   "person.asn1")
+    .option("asn1.type",     "Person")
+    .option("asn1.encoding", "ber")
+    .load("people.ber"))
+
+df.printSchema()
+df.show()
+spark.stop()
+```
+
+```bash
+spark-submit \
+  --jars spark-asn1_2.13-0.1.3-assembly.jar \
+  read_ber.py
+```
+
+For a Databricks cluster or EMR, upload the JAR to DBFS/S3 and attach it as a cluster library — no `--jars` flag needed.
 
 ## Containerized examples
 
@@ -203,7 +239,7 @@ Build the fat JAR first, then start a three-node Spark cluster (one master, two 
 
 ```bash
 sbt assembly
-# produces target/scala-2.13/spark-asn1-assembly-0.1.0.jar
+# produces target/scala-2.13/spark-asn1_2.13-0.1.3-assembly.jar
 ```
 
 **Step 2 — create the project layout**
@@ -297,7 +333,7 @@ docker-compose up -d
 docker-compose exec spark-master \
   spark-submit \
     --master spark://spark-master:7077 \
-    --jars /opt/jars/spark-asn1-assembly-0.1.0.jar \
+    --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar \
     /opt/jobs/read_ber.py
 ```
 
@@ -308,7 +344,7 @@ docker-compose exec spark-master \
   spark-submit \
     --master spark://spark-master:7077 \
     --class com.example.MyJob \
-    --jars /opt/jars/spark-asn1-assembly-0.1.0.jar \
+    --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar \
     /opt/jars/my-job.jar
 ```
 
@@ -325,7 +361,7 @@ Add a notebook service to `docker-compose.yml` for interactive exploration:
       - "8888:8888"
     environment:
       - PYSPARK_SUBMIT_ARGS=--master spark://spark-master:7077
-          --jars /opt/jars/spark-asn1-assembly-0.1.0.jar pyspark-shell
+          --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar pyspark-shell
     volumes:
       - ../target/scala-2.13:/opt/jars
       - ./data:/opt/data
@@ -387,7 +423,7 @@ Submit it the same way:
 docker-compose exec spark-master \
   spark-submit \
     --master spark://spark-master:7077 \
-    --jars /opt/jars/spark-asn1-assembly-0.1.0.jar \
+    --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar \
     /opt/jobs/index_ber.py
 ```
 
@@ -472,6 +508,8 @@ PER write supports the same framing options as read (`length-prefixed`, `fixed-l
 - PER extension additions (extension markers with unknown extensions) are skipped silently.
 - Automatic tagging and explicit/implicit tag resolution are supported for BER/DER; PER and XER ignore tags by design per the standards.
 - Indefinite-length BER files cannot be indexed and remain single-task reads.
+- Parameterized type definitions (e.g. `My-Type{Param} ::= …`) are skipped by the parser; references to them resolve to `BinaryType` (raw bytes).
+- Information object classes (`CLASS`, `DEFINED BY`, table constraints) are not supported and are silently ignored.
 
 ## License
 
