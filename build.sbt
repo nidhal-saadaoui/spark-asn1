@@ -46,7 +46,7 @@ lazy val root = (project in file("."))
       case PathList("META-INF", _*)             => MergeStrategy.discard
       case x                                    => (assembly / assemblyMergeStrategy).value(x)
     },
-    assembly / assemblyJarName := s"${name.value}-${version.value}-assembly.jar",
+    assembly / assemblyJarName := s"${name.value}_${scalaBinaryVersion.value}-${version.value}-assembly.jar",
 
     Test / fork              := true,
     Test / parallelExecution := false,
