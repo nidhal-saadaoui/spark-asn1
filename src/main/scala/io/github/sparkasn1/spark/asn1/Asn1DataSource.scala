@@ -209,10 +209,9 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
         // XER
         // ----------------------------------------------------------------
         case Encoding.Xer =>
-          val decoder = new XerDecoder(registry, rootMod, enumeratedAsInt)
-          Asn1DataSource.projectIter(
-            new XerRecordIterator(rawStream, decoder, rootType),
-            dataSchema, pruning)
+          val decoder  = new XerDecoder(registry, rootMod, enumeratedAsInt)
+          val reqNames = pruning.map(_.toSet).getOrElse(Set.empty[String])
+          new XerRecordIterator(rawStream, decoder, rootType, reqNames)
 
         case other =>
           rawStream.close()

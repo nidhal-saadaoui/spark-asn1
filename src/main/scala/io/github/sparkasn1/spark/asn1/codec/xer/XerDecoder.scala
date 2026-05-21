@@ -50,14 +50,13 @@ class XerDecoder(
    * Decode one XER record supplied as an XML string (the full element, e.g.
    * `<MyMessage>...</MyMessage>`).
    */
-  def decodeXml(xml: String, schema: Asn1Type): InternalRow = {
+  def decodeXml(xml: String, schema: Asn1Type, requiredNames: Set[String] = Set.empty): InternalRow = {
     val reader = factory.createXMLEventReader(new StringReader(xml))
-    // Skip to the first StartElement (the root element)
     while (reader.hasNext && !reader.peek().isStartElement) reader.nextEvent()
     if (!reader.hasNext)
       throw new XerDecodeException("Empty XER document")
     val startEvt = reader.nextEvent().asStartElement()
-    val result   = decodeElement(reader, startEvt, resolveRefs(schema))
+    val result   = decodeElement(reader, startEvt, resolveRefs(schema), requiredNames)
     result match {
       case row: InternalRow => row
       case other            => new GenericInternalRow(Array[Any](other))
@@ -71,7 +70,8 @@ class XerDecoder(
   private def decodeElement(
     reader: javax.xml.stream.XMLEventReader,
     start: StartElement,
-    schema: Asn1Type
+    schema: Asn1Type,
+    requiredNames: Set[String] = Set.empty
   ): Any = schema match {
     case Asn1Null              => consumeToEnd(reader, start); null
     case Asn1Boolean           => decodeBoolean(reader, start)
@@ -82,12 +82,12 @@ class XerDecoder(
     case Asn1RelativeOid       => UTF8String.fromString(decodeText(reader, start).trim)
     case _: Asn1StringType     => UTF8String.fromString(decodeText(reader, start))
     case e: Asn1Enumerated     => decodeEnumeratedElement(reader, start, e)
-    case s: Asn1Sequence       => decodeSequenceElement(reader, start, s)
-    case s: Asn1Set            => decodeSequenceElement(reader, start, Asn1Sequence(s.components, s.extensible))
+    case s: Asn1Sequence       => decodeSequenceElement(reader, start, s, requiredNames)
+    case s: Asn1Set            => decodeSequenceElement(reader, start, Asn1Sequence(s.components, s.extensible), requiredNames)
     case so: Asn1SequenceOf    => decodeSequenceOfElement(reader, start, so)
     case so: Asn1SetOf         => decodeSequenceOfElement(reader, start, Asn1SequenceOf(so.elementType, so.sizeConstraint))
     case c: Asn1Choice         => decodeChoiceElement(reader, start, c)
-    case tt: Asn1TaggedType    => decodeElement(reader, start, resolveRefs(tt.innerType))
+    case tt: Asn1TaggedType    => decodeElement(reader, start, resolveRefs(tt.innerType), requiredNames)
     case Asn1Any               => val t = decodeText(reader, start); UTF8String.fromString(t)
     case _                     => consumeToEnd(reader, start); null
   }
@@ -172,10 +172,11 @@ class XerDecoder(
   private def decodeSequenceElement(
     reader: javax.xml.stream.XMLEventReader,
     start: StartElement,
-    schema: Asn1Sequence
+    schema: Asn1Sequence,
+    requiredNames: Set[String] = Set.empty
   ): InternalRow = {
-    // Build a map: field name → Any value
-    val fieldMap = scala.collection.mutable.Map.empty[String, Any]
+    val decodeAll = requiredNames.isEmpty
+    val fieldMap  = scala.collection.mutable.Map.empty[String, Any]
     var done = false
     while (reader.hasNext && !done) {
       val evt = reader.nextEvent()
@@ -183,9 +184,10 @@ class XerDecoder(
         val s    = evt.asStartElement()
         val name = s.getName.getLocalPart
         schema.components.find(_.name == name) match {
-          case Some(comp) =>
-            val v = decodeElement(reader, s, resolveRefs(comp.asn1Type))
-            fieldMap(name) = v
+          case Some(comp) if decodeAll || requiredNames.contains(name) =>
+            fieldMap(name) = decodeElement(reader, s, resolveRefs(comp.asn1Type))
+          case Some(_) =>
+            consumeToEnd(reader, s) // known but not requested: skip
           case None =>
             consumeToEnd(reader, s) // unknown field: skip
         }

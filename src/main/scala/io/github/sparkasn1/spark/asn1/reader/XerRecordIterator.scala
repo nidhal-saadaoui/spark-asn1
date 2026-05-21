@@ -24,7 +24,8 @@ import javax.xml.stream.{XMLInputFactory, XMLStreamConstants, XMLStreamReader}
 class XerRecordIterator(
   stream: InputStream,
   decoder: XerDecoder,
-  rootSchema: Asn1Type
+  rootSchema: Asn1Type,
+  requiredNames: Set[String] = Set.empty
 ) extends Iterator[InternalRow] with AutoCloseable {
 
   private val WRAP_OPEN  = "<_xer_root_>".getBytes("UTF-8")
@@ -201,7 +202,7 @@ class XerRecordIterator(
   // -------------------------------------------------------------------------
 
   private def tryDecode(xml: String): Option[InternalRow] =
-    try Some(decoder.decodeXml(xml, rootSchema))
+    try Some(decoder.decodeXml(xml, rootSchema, requiredNames))
     catch { case _: Exception => None }
 
   private def escapeXml(s: String): String =
