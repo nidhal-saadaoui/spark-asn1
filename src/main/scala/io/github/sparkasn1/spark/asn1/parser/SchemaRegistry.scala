@@ -12,17 +12,55 @@ class SchemaRegistry(rawModules: Seq[Asn1Module]) {
   /** Module name → fully resolved Asn1Module */
   val modules: Map[String, Asn1Module] = {
     val moduleMap = rawModules.map(m => m.name -> m).toMap
-    // Topological sort by import dependencies, then resolve references.
+    // First pass: topological sort and cross-module reference resolution.
     val ordered = topologicalSort(rawModules, moduleMap)
-    val resolved = scala.collection.mutable.Map.empty[String, Asn1Module]
+    val afterFirstPass = scala.collection.mutable.Map.empty[String, Asn1Module]
     ordered.foreach { m =>
       val resolvedTypes = m.typeAssignments.map { case (n, ta) =>
-        n -> ta.copy(asn1Type = resolveType(ta.asn1Type, m.name, moduleMap, resolved.toMap))
+        n -> ta.copy(asn1Type = resolveType(ta.asn1Type, m.name, moduleMap, afterFirstPass.toMap))
       }
-      resolved(m.name) = m.copy(typeAssignments = resolvedTypes)
+      afterFirstPass(m.name) = m.copy(typeAssignments = resolvedTypes)
     }
-    resolved.toMap
+    // Second pass: resolve any remaining same-module forward references now that
+    // all modules are present in the map.
+    afterFirstPass.map { case (modName, m) =>
+      modName -> m.copy(typeAssignments = m.typeAssignments.map { case (n, ta) =>
+        n -> ta.copy(asn1Type = resolveType(ta.asn1Type, modName, moduleMap, afterFirstPass.toMap))
+      })
+    }.toMap
   }
+
+  /** Unresolved type names found after both resolution passes (empty = fully resolved). */
+  val unresolvedReferences: Set[String] = {
+    val dangling = scala.collection.mutable.LinkedHashSet.empty[String]
+    def scan(t: Asn1Type, modName: String, typeName: String): Unit = t match {
+      case ref: Asn1TypeReference =>
+        dangling += s"$modName.$typeName → '${ref.moduleName.map(_ + ".").getOrElse("")}${ref.typeName}'"
+      case s: Asn1Sequence    => s.components.foreach(c => scan(c.asn1Type, modName, typeName))
+      case s: Asn1Set         => s.components.foreach(c => scan(c.asn1Type, modName, typeName))
+      case s: Asn1SequenceOf  => scan(s.elementType, modName, typeName)
+      case s: Asn1SetOf       => scan(s.elementType, modName, typeName)
+      case c: Asn1Choice      => c.alternatives.foreach(a => scan(a.asn1Type, modName, typeName))
+      case tt: Asn1TaggedType => scan(tt.innerType, modName, typeName)
+      case _                  =>
+    }
+    modules.foreach { case (modName, m) =>
+      m.typeAssignments.foreach { case (typeName, ta) => scan(ta.asn1Type, modName, typeName) }
+    }
+    dangling.toSet
+  }
+
+  /**
+   * Throws [[Asn1SchemaException]] if there are any unresolved type references.
+   * Unresolved references fall back to BinaryType at decode time; call this
+   * when strict schema completeness is required.
+   */
+  def requireComplete(): Unit =
+    if (unresolvedReferences.nonEmpty)
+      throw new Asn1SchemaException(
+        s"Unresolved type references (add the missing .asn1 files to asn1.schema):\n  " +
+        unresolvedReferences.mkString("\n  ")
+      )
 
   /** Look up a fully-qualified type (module.typeName or just typeName using currentModule). */
   def resolve(typeName: String, currentModule: String): Option[Asn1Type] =

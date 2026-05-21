@@ -208,6 +208,105 @@ class Asn1SchemaParserSpec extends AnyFlatSpec with Matchers {
     ex.getMessage should include (":4:")
   }
 
+  // -------------------------------------------------------------------------
+  // Extension additions
+  // -------------------------------------------------------------------------
+
+  it should "parse extension additions as optional components" in {
+    val m = parse("""
+      Mod DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+        Rec ::= SEQUENCE {
+          id   INTEGER,
+          name UTF8String,
+          ...,
+          age  INTEGER OPTIONAL,
+          note UTF8String
+        }
+      END
+    """)
+    val seq = m.typeAssignments("Rec").asn1Type.asInstanceOf[Asn1Sequence]
+    seq.extensible shouldBe true
+    seq.components should have size 4
+    // root components keep their optional flag
+    seq.components(0).name shouldBe "id";   seq.components(0).optional shouldBe false
+    seq.components(1).name shouldBe "name"; seq.components(1).optional shouldBe false
+    // extension additions are always optional
+    seq.components(2).name shouldBe "age";  seq.components(2).optional shouldBe true
+    seq.components(3).name shouldBe "note"; seq.components(3).optional shouldBe true
+  }
+
+  it should "parse extension addition groups ([[...]])" in {
+    val m = parse("""
+      Mod DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+        Rec ::= SEQUENCE {
+          id INTEGER,
+          ...,
+          [[ v2field UTF8String ]]
+        }
+      END
+    """)
+    val seq = m.typeAssignments("Rec").asn1Type.asInstanceOf[Asn1Sequence]
+    seq.extensible shouldBe true
+    seq.components should have size 2
+    seq.components(1).name shouldBe "v2field"
+    seq.components(1).optional shouldBe true
+  }
+
+  // -------------------------------------------------------------------------
+  // Value assignments in constraints
+  // -------------------------------------------------------------------------
+
+  it should "resolve value assignments in INTEGER constraints" in {
+    val m = parse("""
+      Mod DEFINITIONS ::= BEGIN
+        maxPort INTEGER ::= 65535
+        Port    ::= INTEGER (0..maxPort)
+      END
+    """)
+    val i = m.typeAssignments("Port").asn1Type.asInstanceOf[Asn1Integer]
+    i.constraint shouldBe Some(ValueRangeConstraint(0, 65535))
+  }
+
+  it should "resolve value assignments in SIZE constraints" in {
+    val m = parse("""
+      Mod DEFINITIONS ::= BEGIN
+        maxItems INTEGER ::= 10
+        List     ::= SEQUENCE (SIZE(1..maxItems)) OF INTEGER
+      END
+    """)
+    val so = m.typeAssignments("List").asn1Type.asInstanceOf[Asn1SequenceOf]
+    so.sizeConstraint shouldBe Some(SizeConstraint(1, 10))
+  }
+
+  // -------------------------------------------------------------------------
+  // Unresolved type reference detection
+  // -------------------------------------------------------------------------
+
+  it should "expose unresolved type references via unresolvedReferences" in {
+    val modB = Asn1SchemaParser.parseString("""
+      ModB DEFINITIONS ::= BEGIN
+        IMPORTS MyType FROM ModA;
+        R ::= SEQUENCE { x MyType }
+      END
+    """)
+    val reg = SchemaRegistry(Seq(modB))  // ModA is not provided
+    reg.unresolvedReferences should not be empty
+    reg.unresolvedReferences.exists(_.contains("MyType")) shouldBe true
+  }
+
+  it should "throw Asn1SchemaException on requireComplete when refs are unresolved" in {
+    val modB = Asn1SchemaParser.parseString("""
+      ModB DEFINITIONS ::= BEGIN
+        IMPORTS MyType FROM ModA;
+        R ::= SEQUENCE { x MyType }
+      END
+    """)
+    val reg = SchemaRegistry(Seq(modB))
+    val ex = intercept[Asn1SchemaException] { reg.requireComplete() }
+    ex.getMessage should include ("Unresolved type references")
+    ex.getMessage should include ("MyType")
+  }
+
   it should "throw Asn1SchemaException with source name for parseString" in {
     val ex = intercept[Asn1SchemaException] {
       Asn1SchemaParser.parseString("!!! not valid asn1 !!!", "my-schema.asn1")

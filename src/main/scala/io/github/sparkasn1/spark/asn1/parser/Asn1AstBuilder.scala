@@ -10,6 +10,9 @@ import scala.jdk.CollectionConverters._
 /** Translates an ANTLR4 parse tree into the internal Asn1Module ADT. */
 class Asn1AstBuilder extends ASNBaseVisitor[AnyRef] {
 
+  // Per-module integer constants (value assignments), populated before type visiting.
+  private var moduleValueConstants: Map[String, Long] = Map.empty
+
   override def visitModules(ctx: ModulesContext): AnyRef =
     ctx.moduleDefinition().asScala.map(visitModuleDefinition(_).asInstanceOf[Asn1Module]).toSeq
 
@@ -34,6 +37,16 @@ class Asn1AstBuilder extends ASNBaseVisitor[AnyRef] {
     val imports: Seq[SymbolsFromModule] =
       if (body == null || body.imports() == null) Seq.empty
       else visitImports(body.imports())
+
+    // Pre-pass: collect integer value constants so constraints can reference them by name.
+    moduleValueConstants =
+      if (body == null || body.assignmentList() == null) Map.empty
+      else body.assignmentList().assignment().asScala.flatMap { a =>
+        if (a.valueAssignment() != null) {
+          val raw = if (a.valueAssignment().value() != null) a.valueAssignment().value().getText else ""
+          scala.util.Try(raw.toLong).toOption.map(a.IDENTIFIER().getText -> _)
+        } else None
+      }.toMap
 
     val (typeAssignments, valueAssignments): (Map[String, TypeAssignment], Map[String, ValueAssignment]) =
       if (body == null || body.assignmentList() == null) (Map.empty, Map.empty)
@@ -234,18 +247,31 @@ class Asn1AstBuilder extends ASNBaseVisitor[AnyRef] {
     extCtx: ExtensionAndExceptionContext
   ): (Seq[ComponentType], Boolean) = {
     if (ctx == null && extCtx == null) return (Seq.empty, false)
-    val extensible = extCtx != null || (ctx != null && ctx.extensionAndException() != null)
-    val components: Seq[ComponentType] =
+    val hasExt = extCtx != null ||
+      (ctx != null && (ctx.extensionAndException() != null || ctx.extensionAdditions() != null))
+    val rootComponents: Seq[ComponentType] =
       if (ctx == null) Seq.empty
+      else ctx.rootComponentTypeList().asScala
+            .flatMap(_.componentTypeList().componentType().asScala)
+            .flatMap(parseComponentType).toSeq
+    val extensionComponents: Seq[ComponentType] =
+      if (ctx == null || ctx.extensionAdditions() == null) Seq.empty
       else {
-        // rootComponentTypeList() returns List because the rule ref appears in multiple alternatives
-        val rootList = ctx.rootComponentTypeList().asScala
-          .headOption
-          .toSeq
-          .flatMap(_.componentTypeList().componentType().asScala)
-        rootList.flatMap(parseComponentType)
+        val eal = ctx.extensionAdditions().extensionAdditionList()
+        if (eal == null) Seq.empty
+        else eal.extensionAddition().asScala.flatMap { ea =>
+          if (ea.componentType() != null)
+            parseComponentType(ea.componentType()).map(c => c.copy(optional = true)).toSeq
+          else if (ea.extensionAdditionGroup() != null) {
+            val eag = ea.extensionAdditionGroup()
+            if (eag.componentTypeList() == null) Seq.empty
+            else eag.componentTypeList().componentType().asScala
+                  .flatMap(parseComponentType)
+                  .map(c => c.copy(optional = true)).toSeq
+          } else Seq.empty
+        }.toSeq
       }
-    (components, extensible)
+    (rootComponents ++ extensionComponents, hasExt)
   }
 
   private def parseComponentType(ctx: ComponentTypeContext): Option[ComponentType] = {
@@ -335,15 +361,20 @@ class Asn1AstBuilder extends ASNBaseVisitor[AnyRef] {
         }.headOption
       }
 
+  private def resolveEndpointText(text: String, fallback: Long): Long =
+    scala.util.Try(text.toLong).toOption
+      .orElse(moduleValueConstants.get(text))
+      .getOrElse(fallback)
+
   private def parseEndpoint(ctx: SubtypeElementsContext, isFirst: Boolean): Long = {
     val values = ctx.value().asScala
     if (isFirst) {
       if (ctx.MIN_LITERAL() != null) Long.MinValue
-      else values.headOption.flatMap(v => scala.util.Try(v.getText.toLong).toOption)
+      else values.headOption.map(v => resolveEndpointText(v.getText, Long.MinValue))
                             .getOrElse(Long.MinValue)
     } else {
       if (ctx.MAX_LITERAL() != null) Long.MaxValue
-      else values.lastOption.flatMap(v => scala.util.Try(v.getText.toLong).toOption)
+      else values.lastOption.map(v => resolveEndpointText(v.getText, Long.MaxValue))
                             .getOrElse(Long.MaxValue)
     }
   }
@@ -366,14 +397,14 @@ class Asn1AstBuilder extends ASNBaseVisitor[AnyRef] {
                 else if (ste.DOUBLE_DOT() != null) {
                   val lo = if (ste.MIN_LITERAL() != null) 0L
                            else ste.value().asScala.headOption
-                              .flatMap(v => scala.util.Try(v.getText.toLong).toOption).getOrElse(0L)
+                              .map(v => resolveEndpointText(v.getText, 0L)).getOrElse(0L)
                   val hi = if (ste.MAX_LITERAL() != null) Long.MaxValue
                            else ste.value().asScala.lastOption
-                              .flatMap(v => scala.util.Try(v.getText.toLong).toOption).getOrElse(Long.MaxValue)
+                              .map(v => resolveEndpointText(v.getText, Long.MaxValue)).getOrElse(Long.MaxValue)
                   Some(SizeConstraint(lo, hi))
                 } else if (!ste.value().isEmpty) {
-                  scala.util.Try(ste.value(0).getText.toLong).toOption
-                    .map(v => SizeConstraint(v, v))
+                  val v = resolveEndpointText(ste.value(0).getText, -1L)
+                  if (v >= 0) Some(SizeConstraint(v, v)) else None
                 } else None
               }
             }
