@@ -3,7 +3,6 @@ package io.github.sparkasn1.spark.asn1.reader
 import io.github.sparkasn1.spark.asn1.codec.BerDerDecoder
 import io.github.sparkasn1.spark.asn1.model.Asn1Type
 import org.apache.spark.sql.catalyst.InternalRow
-import org.bouncycastle.asn1.ASN1StreamParser
 
 import java.io.InputStream
 
@@ -25,7 +24,7 @@ class BerRecordIterator(
   requiredFields: Option[Seq[String]] = None
 ) extends Iterator[InternalRow] with AutoCloseable {
 
-  private val parser: ASN1StreamParser = decoder.openParser(stream)
+  private val parser: InputStream = decoder.openParser(stream)
   private var decoded  = 0L
   private var nextRow: Option[InternalRow] = prefetch()
 

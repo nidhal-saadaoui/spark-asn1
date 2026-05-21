@@ -42,17 +42,21 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   private val choiceReg = SchemaCache.getOrParse(Seq(new File(schemaDir, "choice.asn1").getAbsolutePath))
   private val realReg   = SchemaCache.getOrParse(Seq(new File(schemaDir, "real.asn1").getAbsolutePath))
 
-  private val simpleAsn1      = simpleReg.resolve("SimpleRecord",  "SimpleModule").get
-  private val personAsn1      = simpleReg.resolve("PersonRecord",  "SimpleModule").get
-  private val nestedAsn1      = nestedReg.resolve("NestedRecord",  "NestedModule").get
-  private val wrapperAsn1     = choiceReg.resolve("Wrapper",       "ChoiceModule").get
-  private val measurementAsn1 = realReg  .resolve("Measurement",   "RealModule"  ).get
+  private val simpleAsn1        = simpleReg.resolve("SimpleRecord",   "SimpleModule").get
+  private val personAsn1        = simpleReg.resolve("PersonRecord",   "SimpleModule").get
+  private val nestedAsn1        = nestedReg.resolve("NestedRecord",   "NestedModule").get
+  private val wrapperAsn1       = choiceReg.resolve("Wrapper",        "ChoiceModule").get
+  private val measurementAsn1   = realReg  .resolve("Measurement",    "RealModule"  ).get
+  private val numericRecordAsn1 = realReg  .resolve("NumericRecord",  "RealModule"  ).get
+  private val readingsAsn1      = realReg  .resolve("Readings",       "RealModule"  ).get
 
-  private val simpleSchema      = Asn1TypeMapper.toSparkType(simpleAsn1,      simpleReg, "SimpleModule").asInstanceOf[StructType]
-  private val personSchema      = Asn1TypeMapper.toSparkType(personAsn1,      simpleReg, "SimpleModule").asInstanceOf[StructType]
-  private val nestedSchema      = Asn1TypeMapper.toSparkType(nestedAsn1,      nestedReg, "NestedModule").asInstanceOf[StructType]
-  private val wrapperSchema     = Asn1TypeMapper.toSparkType(wrapperAsn1,     choiceReg, "ChoiceModule").asInstanceOf[StructType]
-  private val measurementSchema = Asn1TypeMapper.toSparkType(measurementAsn1, realReg,   "RealModule"  ).asInstanceOf[StructType]
+  private val simpleSchema        = Asn1TypeMapper.toSparkType(simpleAsn1,        simpleReg, "SimpleModule").asInstanceOf[StructType]
+  private val personSchema        = Asn1TypeMapper.toSparkType(personAsn1,        simpleReg, "SimpleModule").asInstanceOf[StructType]
+  private val nestedSchema        = Asn1TypeMapper.toSparkType(nestedAsn1,        nestedReg, "NestedModule").asInstanceOf[StructType]
+  private val wrapperSchema       = Asn1TypeMapper.toSparkType(wrapperAsn1,       choiceReg, "ChoiceModule").asInstanceOf[StructType]
+  private val measurementSchema   = Asn1TypeMapper.toSparkType(measurementAsn1,   realReg,   "RealModule"  ).asInstanceOf[StructType]
+  private val numericRecordSchema = Asn1TypeMapper.toSparkType(numericRecordAsn1, realReg,   "RealModule"  ).asInstanceOf[StructType]
+  private val readingsSchema      = Asn1TypeMapper.toSparkType(readingsAsn1,      realReg,   "RealModule"  ).asInstanceOf[StructType]
 
   // --------------------------------------------------------------------------
   // Generators
@@ -162,6 +166,34 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   } yield new GenericInternalRow(Array[Any](
     id, value, UTF8String.fromString(label)
   ))
+
+  // NumericValue ::= CHOICE { intVal INTEGER, realVal REAL, strVal UTF8String }
+  private val genNumericValueRow: Gen[InternalRow] = Gen.oneOf(
+    Gen.choose(-1000000L, 1000000L).map { n =>
+      new GenericInternalRow(Array[Any](UTF8String.fromString("intVal"), n, null, null))
+    },
+    genDouble.map { d =>
+      new GenericInternalRow(Array[Any](UTF8String.fromString("realVal"), null, d, null))
+    },
+    Gen.alphaNumStr.map { s =>
+      new GenericInternalRow(Array[Any](UTF8String.fromString("strVal"), null, null,
+        UTF8String.fromString(s)))
+    }
+  )
+
+  // NumericRecord: id INTEGER, val NumericValue(CHOICE)
+  private val genNumericRecordRow: Gen[InternalRow] = for {
+    id  <- Gen.choose(-100000L, 100000L)
+    v   <- genNumericValueRow
+  } yield new GenericInternalRow(Array[Any](id, v))
+
+  // Readings: id INTEGER, values SEQUENCE OF REAL
+  private val genReadingsRow: Gen[InternalRow] = for {
+    id     <- Gen.choose(-100000L, 100000L)
+    values <- Gen.listOf(genDouble).map { lst =>
+                new GenericArrayData(lst.toArray[Any])
+              }
+  } yield new GenericInternalRow(Array[Any](id, values))
 
   // --------------------------------------------------------------------------
   // Structural equality (handles UTF8String, Array[Byte], ArrayData, InternalRow)
@@ -347,6 +379,58 @@ class RoundTripProperties extends AnyFlatSpec with Matchers with ScalaCheckPrope
   "XER round-trip" should "hold for Measurement (REAL)" in {
     forAll(genMeasurementRow) { row =>
       xerRoundTrip(realReg, "RealModule", "Measurement")(row, measurementSchema, measurementAsn1)
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // REAL in nested types — CHOICE and SEQUENCE OF
+  // --------------------------------------------------------------------------
+
+  "BER round-trip" should "hold for REAL inside CHOICE (NumericRecord)" in {
+    forAll(genNumericRecordRow) { row =>
+      berRoundTrip(realReg, "RealModule")(row, numericRecordSchema, numericRecordAsn1)
+    }
+  }
+
+  it should "hold for REAL inside SEQUENCE OF (Readings)" in {
+    forAll(genReadingsRow) { row =>
+      berRoundTrip(realReg, "RealModule")(row, readingsSchema, readingsAsn1)
+    }
+  }
+
+  "APER round-trip" should "hold for REAL inside CHOICE (NumericRecord)" in {
+    forAll(genNumericRecordRow) { row =>
+      aperRoundTrip(realReg, "RealModule")(row, numericRecordSchema, numericRecordAsn1)
+    }
+  }
+
+  it should "hold for REAL inside SEQUENCE OF (Readings)" in {
+    forAll(genReadingsRow) { row =>
+      aperRoundTrip(realReg, "RealModule")(row, readingsSchema, readingsAsn1)
+    }
+  }
+
+  "UPER round-trip" should "hold for REAL inside CHOICE (NumericRecord)" in {
+    forAll(genNumericRecordRow) { row =>
+      uperRoundTrip(realReg, "RealModule")(row, numericRecordSchema, numericRecordAsn1)
+    }
+  }
+
+  it should "hold for REAL inside SEQUENCE OF (Readings)" in {
+    forAll(genReadingsRow) { row =>
+      uperRoundTrip(realReg, "RealModule")(row, readingsSchema, readingsAsn1)
+    }
+  }
+
+  "XER round-trip" should "hold for REAL inside CHOICE (NumericRecord)" in {
+    forAll(genNumericRecordRow) { row =>
+      xerRoundTrip(realReg, "RealModule", "NumericRecord")(row, numericRecordSchema, numericRecordAsn1)
+    }
+  }
+
+  it should "hold for REAL inside SEQUENCE OF (Readings)" in {
+    forAll(genReadingsRow) { row =>
+      xerRoundTrip(realReg, "RealModule", "Readings")(row, readingsSchema, readingsAsn1)
     }
   }
 }

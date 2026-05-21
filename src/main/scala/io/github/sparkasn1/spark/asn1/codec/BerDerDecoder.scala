@@ -10,7 +10,7 @@ import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
 import org.apache.spark.unsafe.types.UTF8String
 import org.bouncycastle.asn1._
 
-import java.io.InputStream
+import java.io.{ByteArrayOutputStream, InputStream}
 
 /**
  * Decodes ASN.1 BER/DER encoded messages into Spark InternalRow values.
@@ -29,30 +29,40 @@ class BerDerDecoder(
   enumeratedAsInt: Boolean = false
 ) {
 
-  /** Open a streaming parser over the given InputStream. */
-  def openParser(is: InputStream): ASN1StreamParser = new ASN1StreamParser(is)
+  /**
+   * Return the InputStream to use for streaming. Retained for API symmetry with
+   * decodeNext; the caller passes this value back to decodeNext each time.
+   */
+  def openParser(is: InputStream): InputStream = is
 
   /**
    * Read the next complete ASN.1 object from the stream and decode it against
    * `schema`.  Returns None when the stream is exhausted.
+   *
+   * Reads one raw TLV frame before handing bytes to BouncyCastle so that REAL
+   * elements (tag 9, unknown to BC 1.80) can be masked in-place before parsing.
    */
   def decodeNext(
-    parser:         ASN1StreamParser,
+    is:             InputStream,
     schema:         Asn1Type,
     requiredFields: Option[Seq[String]] = None
   ): Option[InternalRow] = {
-    try {
-      val obj = parser.readObject()
-      if (obj == null) None
-      else Some(decodeToRow(obj.toASN1Primitive, schema, requiredFields))
-    } catch {
-      case _: java.io.EOFException => None
+    readRawTlv(is) match {
+      case None => None
+      case Some(rawBytes) =>
+        val masked = maskRealBytes(rawBytes)
+        val obj    = ASN1Primitive.fromByteArray(masked)
+        Some(decodeToRow(obj, schema, requiredFields))
     }
   }
 
-  /** Decode a raw DER/BER byte array against `schema`. Useful in tests. */
+  /**
+   * Decode a raw DER/BER byte array against `schema`.
+   * REAL elements (tag 9) are masked as OCTET STRING before BouncyCastle parsing.
+   */
   def decodeBytes(bytes: Array[Byte], schema: Asn1Type): InternalRow = {
-    val obj = ASN1Primitive.fromByteArray(bytes)
+    val masked = maskRealBytes(bytes)
+    val obj    = ASN1Primitive.fromByteArray(masked)
     decodeToRow(obj, schema)
   }
 
@@ -95,7 +105,10 @@ class BerDerDecoder(
       case c: Asn1Choice        => decodeChoice(obj, c)
       case tt: Asn1TaggedType   => decodeTaggedValue(obj, tt)
       case Asn1Real =>
-        val content = extractRealContent(obj)
+        val content = obj match {
+          case os: ASN1OctetString => os.getOctets  // masked REAL (09→04 before BC parsing)
+          case _                   => extractRealContent(obj)
+        }
         BerRealUtil.decodeContent(content)
       case Asn1Any              => obj.getEncoded
       case _                    => obj.getEncoded
@@ -207,9 +220,11 @@ class BerDerDecoder(
   }
 
   private def decodeSequenceOf(obj: ASN1Primitive, schema: Asn1SequenceOf): ArrayData = {
-    val elements     = extractElements(obj, "SEQUENCE OF")
     val elemResolved = resolveRefs(schema.elementType)
-    val isChoice     = elemResolved.isInstanceOf[Asn1Choice]
+    if (elemResolved == Asn1Real)
+      return new GenericArrayData(extractRealTlvs(obj).map(BerRealUtil.decodeContent).toArray[Any])
+    val elements = extractElements(obj, "SEQUENCE OF")
+    val isChoice = elemResolved.isInstanceOf[Asn1Choice]
     val elems = elements.map {
       case t: ASN1TaggedObject if isChoice => decodeValue(t, schema.elementType)
       case t: ASN1TaggedObject             => decodeTaggedField(t, schema.elementType)
@@ -219,9 +234,11 @@ class BerDerDecoder(
   }
 
   private def decodeSetOf(obj: ASN1Primitive, schema: Asn1SetOf): ArrayData = {
-    val elements     = extractElements(obj, "SET OF")
     val elemResolved = resolveRefs(schema.elementType)
-    val isChoice     = elemResolved.isInstanceOf[Asn1Choice]
+    if (elemResolved == Asn1Real)
+      return new GenericArrayData(extractRealTlvs(obj).map(BerRealUtil.decodeContent).toArray[Any])
+    val elements = extractElements(obj, "SET OF")
+    val isChoice = elemResolved.isInstanceOf[Asn1Choice]
     val elems = elements.map {
       case t: ASN1TaggedObject if isChoice => decodeValue(t, schema.elementType)
       case t: ASN1TaggedObject             => decodeTaggedField(t, schema.elementType)
@@ -229,6 +246,31 @@ class BerDerDecoder(
     }
     new GenericArrayData(elems.toArray[Any])
   }
+
+  private def parseBerTlvContents(bytes: Array[Byte]): Seq[Array[Byte]] = {
+    val result = scala.collection.mutable.ArrayBuffer.empty[Array[Byte]]
+    var i = 0
+    while (i < bytes.length) {
+      if (i + 1 >= bytes.length) i = bytes.length
+      else {
+        val lenByte = bytes(i + 1) & 0xff
+        val (headerLen, elemLen) =
+          if (lenByte <= 127) (2, lenByte)
+          else {
+            val numLen = lenByte & 0x7f
+            val cLen   = (0 until numLen).foldLeft(0)((acc, j) =>
+              (acc << 8) | (if (i + 2 + j < bytes.length) bytes(i + 2 + j) & 0xff else 0))
+            (2 + numLen, cLen)
+          }
+        result += bytes.slice(i + headerLen, i + headerLen + elemLen)
+        i += headerLen + elemLen
+      }
+    }
+    result.toSeq
+  }
+
+  private def extractRealTlvs(obj: ASN1Primitive): Seq[Array[Byte]] =
+    parseBerTlvContents(stripTagLen(obj.getEncoded("DER")))
 
   /** Extract elements from a SEQUENCE or SET primitive as a list of ASN1Primitive. */
   private def extractElements(obj: ASN1Primitive, label: String): Seq[ASN1Primitive] =
@@ -346,6 +388,27 @@ class BerDerDecoder(
       case Asn1Real =>
         // BouncyCastle 1.80 cannot parse REAL (tag 9); extract content from the tagged encoding.
         BerRealUtil.decodeContent(extractRealContent(tagged))
+
+      case _: Asn1Choice =>
+        // CHOICE fields in AUTOMATIC TAGS modules use EXPLICIT outer tags. The inner content
+        // is a context-tagged alternative (not a raw universal TLV), so toASN1Primitive is safe.
+        if (tagged.isExplicit)
+          decodeChoice(tagged.getBaseObject.toASN1Primitive, eff.asInstanceOf[Asn1Choice])
+        else
+          decodeValue(reinterpretImplicit(tagged, eff), eff)
+
+      case so: Asn1SequenceOf if resolveRefs(so.elementType) == Asn1Real =>
+        // getBaseUniversal fails for SEQUENCE OF REAL because BouncyCastle tries to eagerly
+        // parse REAL sub-elements (tag 9). Extract the inner content bytes directly.
+        new GenericArrayData(
+          parseBerTlvContents(stripTagLen(tagged.getEncoded("DER")))
+            .map(BerRealUtil.decodeContent).toArray[Any])
+
+      case so: Asn1SetOf if resolveRefs(so.elementType) == Asn1Real =>
+        new GenericArrayData(
+          parseBerTlvContents(stripTagLen(tagged.getEncoded("DER")))
+            .map(BerRealUtil.decodeContent).toArray[Any])
+
       case _ =>
         val implicitForConstructed = eff match {
           case _: Asn1Sequence | _: Asn1SequenceOf | _: Asn1Set | _: Asn1SetOf => true
@@ -356,6 +419,16 @@ class BerDerDecoder(
         else
           decodeValue(tagged.getBaseObject.toASN1Primitive, eff)
     }
+  }
+
+  private def stripTagLen(enc: Array[Byte]): Array[Byte] = {
+    if (enc.length < 2) return Array.empty
+    val lenByte = enc(1) & 0xff
+    val headerLen =
+      if (lenByte <= 127) 2
+      else 2 + (lenByte & 0x7f)
+    if (headerLen >= enc.length) Array.empty
+    else enc.slice(headerLen, enc.length)
   }
 
   /**
@@ -496,18 +569,21 @@ class BerDerDecoder(
             (idx, value)
 
           case None if wireClass == BERTags.CONTEXT_SPECIFIC =>
-            // 2. Fallback: index-based for AUTOMATIC TAGS (tagNo == fieldIndex)
+            // 2. Fallback: index-based for AUTOMATIC TAGS (tagNo == altIndex)
             val altIdx = if (wireTagNo < schema.alternatives.size) wireTagNo else -1
             if (altIdx >= 0) {
               val alt         = schema.alternatives(altIdx)
               val altResolved = resolveRefs(alt.asn1Type)
-              // Constructed/CHOICE types can handle the full tagged object; scalars need unwrap
-              val objToPass   = altResolved match {
+              val value = altResolved match {
+                case Asn1Real =>
+                  BerRealUtil.decodeContent(extractRealContent(tagged))
                 case _: Asn1Choice | _: Asn1Sequence | _: Asn1Set |
-                     _: Asn1SequenceOf | _: Asn1SetOf => tagged
-                case _                                 => tagged.getBaseObject.toASN1Primitive
+                     _: Asn1SequenceOf | _: Asn1SetOf =>
+                  decodeValue(tagged, alt.asn1Type)
+                case _ =>
+                  decodeValue(reinterpretImplicit(tagged, altResolved), altResolved)
               }
-              (altIdx, decodeValue(objToPass, alt.asn1Type))
+              (altIdx, value)
             } else (-1, null)
 
           case None => (-1, null)
@@ -559,6 +635,149 @@ class BerDerDecoder(
       case _                   => obj
     }
     decodeValue(inner, tt.innerType)
+  }
+
+  // -----------------------------------------------------------------------
+  // Raw TLV frame reader (used by decodeNext to capture bytes before parsing)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Read one complete BER/DER TLV from `is` and return its raw bytes.
+   * Returns None at a clean EOF before the first byte of a new record.
+   * Handles both definite-length and indefinite-length (depth-tracked) encoding.
+   */
+  private def readRawTlv(is: InputStream): Option[Array[Byte]] = {
+    val out = new ByteArrayOutputStream(512)
+    val t0  = is.read()
+    if (t0 < 0) return None
+    out.write(t0)
+    if ((t0 & 0x1f) == 0x1f) {            // long-form tag: read continuation bytes
+      var b = is.read()
+      while (b >= 0 && (b & 0x80) != 0) { out.write(b); b = is.read() }
+      if (b < 0) return None
+      out.write(b)
+    }
+    val l0 = is.read()
+    if (l0 < 0) return None
+    out.write(l0)
+    (l0 & 0xff) match {
+      case 0x80 =>
+        readIndefiniteContent(is, out)   // stops after matching EOC
+      case n if n <= 127 =>
+        rawReadFully(is, n, out)
+      case n =>
+        val nb  = n & 0x7f
+        var len = 0
+        (0 until nb).foreach { _ =>
+          val b = is.read(); if (b < 0) return None; out.write(b)
+          len = (len << 8) | (b & 0xff)
+        }
+        rawReadFully(is, len, out)
+    }
+    Some(out.toByteArray)
+  }
+
+  /** Read `len` bytes from `is` into `out`. */
+  private def rawReadFully(is: InputStream, len: Int, out: ByteArrayOutputStream): Unit = {
+    if (len <= 0) return
+    val buf = new Array[Byte](math.min(len, 65536))
+    var rem = len
+    while (rem > 0) {
+      val n = is.read(buf, 0, math.min(rem, buf.length))
+      if (n < 0) return
+      out.write(buf, 0, n)
+      rem -= n
+    }
+  }
+
+  /**
+   * Read TLVs into `out` until the indefinite-length EOC (`00 00`) that matches
+   * the current depth.  Handles nested indefinite-length constructions.
+   */
+  private def readIndefiniteContent(is: InputStream, out: ByteArrayOutputStream): Unit = {
+    var depth = 1
+    while (depth > 0) {
+      val t = is.read(); if (t < 0) return; out.write(t)
+      if ((t & 0x1f) == 0x1f) {           // long-form tag in child
+        var b = is.read()
+        while (b >= 0 && (b & 0x80) != 0) { out.write(b); b = is.read() }
+        if (b < 0) return; out.write(b)
+      }
+      val l = is.read(); if (l < 0) return; out.write(l)
+      (t, l & 0xff) match {
+        case (0, 0)    => depth -= 1             // EOC
+        case (_, 0x80) => depth += 1             // nested indefinite
+        case (_, n) if n <= 127 => rawReadFully(is, n, out)
+        case (_, n) =>
+          val nb  = n & 0x7f
+          var len = 0
+          (0 until nb).foreach { _ =>
+            val b = is.read(); if (b < 0) return; out.write(b)
+            len = (len << 8) | (b & 0xff)
+          }
+          rawReadFully(is, len, out)
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // REAL byte masking — replace tag 09 with 04 before BouncyCastle parsing
+  // -----------------------------------------------------------------------
+
+  /**
+   * Return a copy of `bytes` with every REAL tag byte (0x09) replaced by an
+   * OCTET STRING tag (0x04).  Recurses into all constructed TLVs so that REAL
+   * elements nested inside SEQUENCE OF or CHOICE are also patched.
+   *
+   * decodeValue handles the masked OCTET STRING for Asn1Real by reading
+   * os.getOctets() directly as the REAL content bytes.
+   */
+  private def maskRealBytes(bytes: Array[Byte]): Array[Byte] = {
+    val result = bytes.clone()
+    maskRealAt(result, 0, result.length)
+    result
+  }
+
+  private def maskRealAt(b: Array[Byte], pos: Int, end: Int): Unit = {
+    var i = pos
+    while (i < end && i < b.length) {
+      val tag = b(i) & 0xff
+
+      // For long-form tags (bits 4-0 == 0x1f) the actual tag number is encoded in
+      // one or more continuation bytes that follow, each with bit 7 set except the
+      // last.  We must skip all of them to reach the actual length byte.
+      var lenPos = i + 1
+      if ((tag & 0x1f) == 0x1f) {
+        while (lenPos < b.length && (b(lenPos) & 0x80) != 0) lenPos += 1
+        lenPos += 1  // skip the last continuation byte (high bit clear)
+      }
+      if (lenPos >= b.length) return
+
+      val lenByte = b(lenPos) & 0xff
+      val tagLen  = lenPos - i       // bytes consumed by the tag field
+      val (extraLen, contLen): (Int, Int) =
+        if (lenByte <= 127) (0, lenByte)
+        else {
+          val nb   = lenByte & 0x7f
+          var cLen = 0
+          var j    = 0
+          while (j < nb && lenPos + 1 + j < b.length) {
+            cLen = (cLen << 8) | (b(lenPos + 1 + j) & 0xff)
+            j += 1
+          }
+          (nb, cLen)
+        }
+      val hdrLen = tagLen + 1 + extraLen
+
+      if (tag == 0x09) {
+        b(i) = 0x04.toByte              // REAL → OCTET STRING (always single-byte tag)
+      } else if ((tag & 0x20) != 0) {   // constructed: recurse into content
+        maskRealAt(b, i + hdrLen, i + hdrLen + contLen)
+      }
+      val advance = hdrLen + contLen
+      if (advance <= 0) return           // safety guard against malformed data
+      i += advance
+    }
   }
 
   // -----------------------------------------------------------------------

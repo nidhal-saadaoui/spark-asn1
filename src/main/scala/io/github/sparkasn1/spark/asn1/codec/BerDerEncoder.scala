@@ -164,16 +164,26 @@ class BerDerEncoder(
   private def encodeChoice(row: InternalRow, st: StructType, choice: Asn1Choice): Array[Byte] = {
     val tagIdx  = Try(st.fieldIndex(choiceTagField)).getOrElse(0)
     val tagName = row.get(tagIdx, StringType).asInstanceOf[UTF8String].toString
-    choice.alternatives.find(_.name == tagName) match {
+    val altWithIndex = choice.alternatives.zipWithIndex.find { case (alt, _) => alt.name == tagName }
+    altWithIndex match {
       case None => DERNull.INSTANCE.getEncoded("DER")
-      case Some(alt) =>
+      case Some((alt, altIdx)) =>
         val fieldIdx = Try(st.fieldIndex(alt.name)).getOrElse(-1)
         if (fieldIdx < 0) DERNull.INSTANCE.getEncoded("DER")
         else {
           val field = st(fieldIdx)
           val v     = row.get(fieldIdx, field.dataType)
           if (v == null) DERNull.INSTANCE.getEncoded("DER")
-          else encodeDer(v, field.dataType, alt.asn1Type)
+          else {
+            val innerDer = encodeDer(v, field.dataType, alt.asn1Type)
+            // In AUTOMATIC TAGS mode, apply context tag by alternative index so the
+            // decoder can identify the selected alternative without knowing the universal tag.
+            if (autoTags) {
+              val needsExplicit = resolveRefs(alt.asn1Type).isInstanceOf[Asn1Choice]
+              if (needsExplicit) applyExplicitTag(altIdx, innerDer)
+              else               applyImplicitTag(altIdx, innerDer)
+            } else innerDer
+          }
         }
     }
   }

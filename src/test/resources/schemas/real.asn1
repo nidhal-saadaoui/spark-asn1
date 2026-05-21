@@ -6,4 +6,22 @@ RealModule DEFINITIONS AUTOMATIC TAGS ::= BEGIN
     label UTF8String
   }
 
+  -- REAL inside CHOICE
+  NumericValue ::= CHOICE {
+    intVal  INTEGER,
+    realVal REAL,
+    strVal  UTF8String
+  }
+
+  NumericRecord ::= SEQUENCE {
+    id  INTEGER,
+    val NumericValue
+  }
+
+  -- REAL inside SEQUENCE OF
+  Readings ::= SEQUENCE {
+    id     INTEGER,
+    values SEQUENCE OF REAL
+  }
+
 END
