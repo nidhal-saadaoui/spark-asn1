@@ -88,6 +88,7 @@ class XerDecoder(
     case so: Asn1SetOf         => decodeSequenceOfElement(reader, start, Asn1SequenceOf(so.elementType, so.sizeConstraint))
     case c: Asn1Choice         => decodeChoiceElement(reader, start, c)
     case tt: Asn1TaggedType    => decodeElement(reader, start, resolveRefs(tt.innerType), requiredNames)
+    case Asn1Real              => decodeRealElement(reader, start)
     case Asn1Any               => val t = decodeText(reader, start); UTF8String.fromString(t)
     case _                     => consumeToEnd(reader, start); null
   }
@@ -162,6 +163,31 @@ class XerDecoder(
         byteIdx < bytes.length && ((bytes(byteIdx) >> bitIdx) & 1) == 1
       }.map(nb => UTF8String.fromString(nb.name): Any).toArray
       new GenericInternalRow(Array[Any](bytes, new GenericArrayData(setBitNames)))
+    }
+  }
+
+  private def decodeRealElement(reader: javax.xml.stream.XMLEventReader, start: StartElement): Double = {
+    var specialName: Option[String] = None
+    var text = ""
+    var done = false
+    while (reader.hasNext && !done) {
+      val evt = reader.nextEvent()
+      if (evt.isStartElement) {
+        specialName = Some(evt.asStartElement().getName.getLocalPart)
+        consumeUntilEndElement(reader, 1)
+      } else if (evt.isCharacters) {
+        text += evt.asCharacters().getData
+      } else if (evt.isEndElement) {
+        done = true
+      }
+    }
+    specialName match {
+      case Some("PLUS-INFINITY")  => Double.PositiveInfinity
+      case Some("MINUS-INFINITY") => Double.NegativeInfinity
+      case Some("NOT-A-NUMBER")   => Double.NaN
+      case _ =>
+        val t = text.trim
+        if (t.isEmpty) 0.0 else t.toDouble
     }
   }
 

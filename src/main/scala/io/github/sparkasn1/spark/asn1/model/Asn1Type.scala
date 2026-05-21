@@ -11,6 +11,7 @@ case object Asn1OctetString     extends Asn1Type
 case object Asn1ObjectIdentifier extends Asn1Type
 case object Asn1RelativeOid     extends Asn1Type
 case object Asn1Any             extends Asn1Type
+case object Asn1Real            extends Asn1Type
 
 case class Asn1Integer(constraint: Option[ValueRangeConstraint] = None) extends Asn1Type
 

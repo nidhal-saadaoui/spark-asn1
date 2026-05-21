@@ -1,0 +1,9 @@
+RealModule DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+  Measurement ::= SEQUENCE {
+    id    INTEGER,
+    value REAL,
+    label UTF8String
+  }
+
+END

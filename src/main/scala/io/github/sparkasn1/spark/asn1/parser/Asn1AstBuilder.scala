@@ -128,6 +128,7 @@ class Asn1AstBuilder extends ASNBaseVisitor[AnyRef] {
       visitRestrictedCharacterStringType(ctx.restrictedCharacterStringType())
     else if (ctx.BOOLEAN_LITERAL() != null) Asn1Boolean
     else if (ctx.NULL_LITERAL()    != null) Asn1Null
+    else if (ctx.REAL_LITERAL()    != null) Asn1Real
     else Asn1Any
   }
 

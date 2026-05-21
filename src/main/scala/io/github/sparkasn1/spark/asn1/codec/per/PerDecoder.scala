@@ -2,7 +2,7 @@ package io.github.sparkasn1.spark.asn1.codec.per
 
 import io.github.sparkasn1.spark.asn1.model._
 import io.github.sparkasn1.spark.asn1.parser.SchemaRegistry
-import io.github.sparkasn1.spark.asn1.util.BitUtils
+import io.github.sparkasn1.spark.asn1.util.{BitUtils, BerRealUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.util.GenericArrayData
@@ -74,6 +74,7 @@ class PerDecoder(
       case so: Asn1SetOf         => decodeSequenceOf(buf, Asn1SequenceOf(so.elementType, so.sizeConstraint))
       case c: Asn1Choice         => decodeChoice(buf, c)
       case tt: Asn1TaggedType    => decodeValue(buf, tt.innerType)
+      case Asn1Real              => decodeReal(buf)
       case Asn1Any               => decodeOctetString(buf, None)
       case _: Asn1TypeReference  => null // unresolved ref; schema registry should have resolved this
     }
@@ -157,6 +158,14 @@ class PerDecoder(
       }.map(nb => UTF8String.fromString(nb.name): Any).toArray
       new GenericInternalRow(Array[Any](bytes, new GenericArrayData(setBitNames)))
     }
+  }
+
+  private def decodeReal(buf: PerBitBuffer): Double = {
+    val len = readLengthDeterminant(buf)
+    maybeAlign(buf)
+    if (len == 0) return 0.0
+    val content = buf.readByteArray(len.toInt)
+    BerRealUtil.decodeContent(content)
   }
 
   private def decodeString(buf: PerBitBuffer): UTF8String = {

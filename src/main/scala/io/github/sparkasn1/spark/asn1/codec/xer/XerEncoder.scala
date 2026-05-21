@@ -50,6 +50,13 @@ class XerEncoder(
       case _: Asn1Integer =>
         sb.append(value.asInstanceOf[Long])
 
+      case Asn1Real =>
+        val d = value.asInstanceOf[Double]
+        if (d.isInfinite && d > 0) sb.append("<PLUS-INFINITY/>")
+        else if (d.isInfinite)     sb.append("<MINUS-INFINITY/>")
+        else if (d.isNaN)          sb.append("<NOT-A-NUMBER/>")
+        else                       sb.append(d)
+
       case Asn1OctetString =>
         sb.append(bytesToHex(value.asInstanceOf[Array[Byte]]))
 

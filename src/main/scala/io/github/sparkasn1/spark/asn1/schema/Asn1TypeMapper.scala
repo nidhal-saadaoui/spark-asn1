@@ -48,6 +48,7 @@ object Asn1TypeMapper {
     case Asn1ObjectIdentifier => StringType
     case Asn1RelativeOid     => StringType
     case Asn1Any             => BinaryType
+    case Asn1Real            => DoubleType
 
     // All restricted character string types → StringType
     case _: Asn1StringType   => StringType

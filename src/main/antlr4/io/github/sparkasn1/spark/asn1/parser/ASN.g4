@@ -467,6 +467,7 @@ builtinType
     | restrictedCharacterStringType
     | BOOLEAN_LITERAL
     | NULL_LITERAL
+    | REAL_LITERAL
     ;
 
 // --- Restricted character string types (spark-asn1 extension) ---

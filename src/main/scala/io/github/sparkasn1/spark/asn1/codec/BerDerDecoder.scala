@@ -3,6 +3,7 @@ package io.github.sparkasn1.spark.asn1.codec
 import io.github.sparkasn1.spark.asn1.model._
 import io.github.sparkasn1.spark.asn1.parser.SchemaRegistry
 import io.github.sparkasn1.spark.asn1.schema.Asn1TypeMapper
+import io.github.sparkasn1.spark.asn1.util.BerRealUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
@@ -93,6 +94,9 @@ class BerDerDecoder(
       case so: Asn1SetOf        => decodeSetOf(obj, so)
       case c: Asn1Choice        => decodeChoice(obj, c)
       case tt: Asn1TaggedType   => decodeTaggedValue(obj, tt)
+      case Asn1Real =>
+        val content = extractRealContent(obj)
+        BerRealUtil.decodeContent(content)
       case Asn1Any              => obj.getEncoded
       case _                    => obj.getEncoded
     }
@@ -338,14 +342,20 @@ class BerDerDecoder(
    */
   private def decodeTaggedField(tagged: ASN1TaggedObject, schema: Asn1Type): Any = {
     val eff = resolveRefs(schema)
-    val implicitForConstructed = eff match {
-      case _: Asn1Sequence | _: Asn1SequenceOf | _: Asn1Set | _: Asn1SetOf => true
-      case _ => false
+    eff match {
+      case Asn1Real =>
+        // BouncyCastle 1.80 cannot parse REAL (tag 9); extract content from the tagged encoding.
+        BerRealUtil.decodeContent(extractRealContent(tagged))
+      case _ =>
+        val implicitForConstructed = eff match {
+          case _: Asn1Sequence | _: Asn1SequenceOf | _: Asn1Set | _: Asn1SetOf => true
+          case _ => false
+        }
+        if (!tagged.isExplicit || implicitForConstructed)
+          decodeValue(reinterpretImplicit(tagged, eff), eff)
+        else
+          decodeValue(tagged.getBaseObject.toASN1Primitive, eff)
     }
-    if (!tagged.isExplicit || implicitForConstructed)
-      decodeValue(reinterpretImplicit(tagged, eff), eff)
-    else
-      decodeValue(tagged.getBaseObject.toASN1Primitive, eff)
   }
 
   /**
@@ -358,6 +368,27 @@ class BerDerDecoder(
     if (uTag < 0) tagged.getBaseObject.toASN1Primitive
     else try tagged.getBaseUniversal(false, uTag)
          catch { case _: Exception => tagged.getBaseObject.toASN1Primitive }
+  }
+
+  /** Extract BER REAL content bytes from any ASN1 object (universal or implicit-tagged). */
+  private def extractRealContent(obj: ASN1Primitive): Array[Byte] =
+    extractRealContent(obj.getEncoded("DER"), expectTag9 = true)
+
+  private def extractRealContent(tagged: ASN1TaggedObject): Array[Byte] =
+    extractRealContent(tagged.getEncoded("DER"), expectTag9 = false)
+
+  private def extractRealContent(enc: Array[Byte], expectTag9: Boolean): Array[Byte] = {
+    if (enc.length < 2) return Array.empty
+    if (expectTag9 && (enc(0) & 0xff) != 0x09) return Array.empty
+    val lenByte = enc(1) & 0xff
+    val (contentStart, contentLen) =
+      if (lenByte <= 127) (2, lenByte)
+      else {
+        val numLen = lenByte & 0x7f
+        val cLen   = (0 until numLen).foldLeft(0)((acc, i) => (acc << 8) | (enc(2 + i) & 0xff))
+        (2 + numLen, cLen)
+      }
+    enc.slice(contentStart, contentStart + contentLen)
   }
 
   private def universalTagFor(schema: Asn1Type): Int = schema match {

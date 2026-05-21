@@ -2,7 +2,7 @@ package io.github.sparkasn1.spark.asn1.codec.per
 
 import io.github.sparkasn1.spark.asn1.model._
 import io.github.sparkasn1.spark.asn1.parser.SchemaRegistry
-import io.github.sparkasn1.spark.asn1.util.BitUtils
+import io.github.sparkasn1.spark.asn1.util.{BitUtils, BerRealUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
@@ -58,6 +58,11 @@ class PerEncoder(
 
       case b: Asn1BitString =>
         encodeBitString(buf, value, sparkType, b)
+
+      case Asn1Real =>
+        val content = BerRealUtil.encodeContent(value.asInstanceOf[Double])
+        writeLengthDet(buf, content.length)
+        buf.writeBytes(content)
 
       case Asn1ObjectIdentifier | Asn1RelativeOid =>
         val oidBytes = oidStringToBerBytes(value.asInstanceOf[UTF8String].toString)
