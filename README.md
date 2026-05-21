@@ -1,5 +1,7 @@
 # spark-asn1
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 A schema-driven Apache Spark data source for reading ASN.1-encoded files — BER, DER, Aligned PER, Unaligned PER, and XER — without any code-generation step.
 
 Supply a `.asn1` schema file and a root type name; spark-asn1 parses the schema at runtime and decodes binary records directly into Spark SQL rows.
