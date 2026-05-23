@@ -144,6 +144,8 @@ val df = spark.read
 
 ### CHOICE — reading the discriminator
 
+A CHOICE type maps to a struct with a string discriminator field (`_tag` by default) plus one nullable field per alternative. Only the field matching `_tag` is non-null.
+
 Schema:
 ```asn1
 Shape ::= CHOICE {
@@ -160,9 +162,49 @@ val df = spark.read
   .option("asn1.encoding", "ber")
   .load("shapes.ber")
 
-// Schema: _tag STRING, circle STRUCT<…>, rectangle STRUCT<…>
-// Only the field matching _tag is non-null.
+// Resulting schema: _tag STRING NOT NULL, circle STRUCT<…>, rectangle STRUCT<…>
 df.filter($"_tag" === "circle").select($"circle.*").show()
+
+// Pattern-match with CASE WHEN:
+import org.apache.spark.sql.functions._
+df.select(
+  when($"_tag" === "circle",    $"circle.radius")
+   .when($"_tag" === "rectangle", $"rectangle.width")
+   .as("dimension")
+).show()
+```
+
+**CHOICE nested inside a SEQUENCE** — the most common case. Access alternatives via the parent field:
+
+```asn1
+Message ::= SEQUENCE {
+  id      INTEGER,
+  payload CHOICE {
+    text  UTF8String,
+    bytes OCTET STRING
+  }
+}
+```
+
+```scala
+val df = spark.read.format("asn1")
+  .option("asn1.schema", "msg.asn1").option("asn1.type", "Message")
+  .option("asn1.encoding", "ber").load("messages.ber")
+
+// payload maps to STRUCT<_tag STRING, text STRING, bytes BINARY>
+df.select($"id", $"payload._tag", $"payload.text")
+  .filter($"payload._tag" === "text")
+  .show()
+```
+
+**Renaming the discriminator field** — useful when `_tag` collides with an existing field name:
+
+```scala
+spark.read.format("asn1")
+  .option("asn1.schema",           "shapes.asn1")
+  .option("asn1.type",             "Shape")
+  .option("asn1.choice.tag.field", "kind")   // discriminator is now "kind"
+  .load("shapes.ber")
 ```
 
 ### Multi-module schemas

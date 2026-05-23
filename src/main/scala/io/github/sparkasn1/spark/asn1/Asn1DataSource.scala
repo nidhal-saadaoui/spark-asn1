@@ -151,8 +151,12 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
     }
     val perRecordBytes = opts.perRecordBytes.getOrElse(0)
 
-    // Column pruning: only decode fields requested by the query.
-    // None means decode all (requiredSchema == dataSchema).
+    // BER/DER deep pruning: pass the full required StructType so nested SEQUENCEs are
+    // also pruned at decode time (not just top-level fields).
+    val berPruning: Option[StructType] =
+      if (requiredSchema == dataSchema) None else Some(requiredSchema)
+
+    // PER/XER top-level pruning by field name (decoder applies projection post-decode).
     val pruning: Option[Seq[String]] =
       if (requiredSchema.fieldNames.toSet == dataSchema.fieldNames.toSet) None
       else Some(requiredSchema.fieldNames.toSeq)
@@ -193,11 +197,11 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
               (Iterator.empty: Iterator[InternalRow])
             } else {
               rawStream.seek(offsets(0))
-              new BerRecordIterator(rawStream, decoder, rootType, offsets.length.toLong, pruning,
+              new BerRecordIterator(rawStream, decoder, rootType, offsets.length.toLong, berPruning,
                 path.getName)
             }
           } else {
-            new BerRecordIterator(rawStream, decoder, rootType, Long.MaxValue, pruning,
+            new BerRecordIterator(rawStream, decoder, rootType, Long.MaxValue, berPruning,
               path.getName)
           }
 

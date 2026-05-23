@@ -3,6 +3,7 @@ package io.github.sparkasn1.spark.asn1.reader
 import io.github.sparkasn1.spark.asn1.codec.BerDerDecoder
 import io.github.sparkasn1.spark.asn1.model.Asn1Type
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.types.StructType
 import org.slf4j.LoggerFactory
 
 import java.io.InputStream
@@ -21,9 +22,9 @@ class BerRecordIterator(
   stream:         InputStream,
   decoder:        BerDerDecoder,
   rootSchema:     Asn1Type,
-  maxRecords:     Long                = Long.MaxValue,
-  requiredFields: Option[Seq[String]] = None,
-  sourceName:     String              = ""
+  maxRecords:     Long               = Long.MaxValue,
+  requiredSchema: Option[StructType] = None,
+  sourceName:     String             = ""
 ) extends Iterator[InternalRow] with AutoCloseable {
 
   private val log = LoggerFactory.getLogger(classOf[BerRecordIterator])
@@ -42,7 +43,7 @@ class BerRecordIterator(
 
   private def prefetch(): Option[InternalRow] = {
     if (decoded >= maxRecords) return None
-    try decoder.decodeNext(parser, rootSchema, requiredFields)
+    try decoder.decodeNext(parser, rootSchema, requiredSchema)
     catch { case _: Exception => None }
   }
 

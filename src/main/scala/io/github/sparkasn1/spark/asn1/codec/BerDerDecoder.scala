@@ -7,6 +7,7 @@ import io.github.sparkasn1.spark.asn1.util.BerRealUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.unsafe.types.UTF8String
 import org.bouncycastle.asn1._
 
@@ -45,14 +46,14 @@ class BerDerDecoder(
   def decodeNext(
     is:             InputStream,
     schema:         Asn1Type,
-    requiredFields: Option[Seq[String]] = None
+    requiredSchema: Option[StructType] = None
   ): Option[InternalRow] = {
     readRawTlv(is) match {
       case None => None
       case Some(rawBytes) =>
         val masked = maskRealBytes(rawBytes)
         val obj    = ASN1Primitive.fromByteArray(masked)
-        Some(decodeToRow(obj, schema, requiredFields))
+        Some(decodeToRow(obj, schema, requiredSchema))
     }
   }
 
@@ -73,13 +74,13 @@ class BerDerDecoder(
   private def decodeToRow(
     obj:            ASN1Primitive,
     schema:         Asn1Type,
-    requiredFields: Option[Seq[String]] = None
+    requiredSchema: Option[StructType] = None
   ): InternalRow = {
     val eff = resolveRefs(schema)
     eff match {
-      case s: Asn1Sequence    => decodeSequence(obj, s, requiredFields)
-      case s: Asn1Set         => decodeSet(obj, s, requiredFields)
-      case c: Asn1Choice      => decodeChoice(obj, c, requiredFields)
+      case s: Asn1Sequence    => decodeSequence(obj, s, requiredSchema)
+      case s: Asn1Set         => decodeSet(obj, s, requiredSchema)
+      case c: Asn1Choice      => decodeChoice(obj, c, requiredSchema)
       case tt: Asn1TaggedType => new GenericInternalRow(Array[Any](decodeTaggedValue(obj, tt)))
       case _                  => new GenericInternalRow(Array[Any](decodeValue(obj, eff)))
     }
@@ -190,32 +191,32 @@ class BerDerDecoder(
   private def decodeSequence(
     obj:            ASN1Primitive,
     schema:         Asn1Sequence,
-    requiredFields: Option[Seq[String]] = None
+    requiredSchema: Option[StructType] = None
   ): InternalRow = {
-    val elements = extractElements(obj, "SEQUENCE")
-    val required = requiredFields.map(_.toSet).getOrElse(Set.empty)
-    val allValues = decodeComponents(elements, schema.components, required)
-    requiredFields match {
+    val elements  = extractElements(obj, "SEQUENCE")
+    val required  = requiredSchema.map(st => st.fieldNames.toSet).getOrElse(Set.empty)
+    val allValues = decodeComponents(elements, schema.components, required, requiredSchema)
+    requiredSchema match {
       case None => new GenericInternalRow(allValues)
-      case Some(fields) =>
+      case Some(st) =>
         val nameToIdx = schema.components.zipWithIndex.map { case (c, i) => c.name -> i }.toMap
-        new GenericInternalRow(fields.map(f => allValues(nameToIdx(f))).toArray[Any])
+        new GenericInternalRow(st.fieldNames.map(f => allValues(nameToIdx(f))).toArray[Any])
     }
   }
 
   private def decodeSet(
     obj:            ASN1Primitive,
     schema:         Asn1Set,
-    requiredFields: Option[Seq[String]] = None
+    requiredSchema: Option[StructType] = None
   ): InternalRow = {
-    val elements = extractElements(obj, "SET")
-    val required = requiredFields.map(_.toSet).getOrElse(Set.empty)
-    val allValues = decodeComponents(elements, schema.components, required)
-    requiredFields match {
+    val elements  = extractElements(obj, "SET")
+    val required  = requiredSchema.map(st => st.fieldNames.toSet).getOrElse(Set.empty)
+    val allValues = decodeComponents(elements, schema.components, required, requiredSchema)
+    requiredSchema match {
       case None => new GenericInternalRow(allValues)
-      case Some(fields) =>
+      case Some(st) =>
         val nameToIdx = schema.components.zipWithIndex.map { case (c, i) => c.name -> i }.toMap
-        new GenericInternalRow(fields.map(f => allValues(nameToIdx(f))).toArray[Any])
+        new GenericInternalRow(st.fieldNames.map(f => allValues(nameToIdx(f))).toArray[Any])
     }
   }
 
@@ -304,7 +305,8 @@ class BerDerDecoder(
   private def decodeComponents(
     elements:      Seq[ASN1Primitive],
     components:    Seq[ComponentType],
-    requiredNames: Set[String] = Set.empty
+    requiredNames: Set[String]         = Set.empty,
+    parentSchema:  Option[StructType]  = None
   ): Array[Any] = {
     val decodeAll = requiredNames.isEmpty
     val result    = new Array[Any](components.size)
@@ -333,18 +335,22 @@ class BerDerDecoder(
             }
             if (decodeAll || requiredNames.contains(comp.name)) {
               val inner = resolveRefs(tt.innerType)
+              val child = childPruningFor(comp.name, parentSchema)
               result(idx) = wireTagged.get((berClass, tt.tagNumber)).map { t =>
-                tt.tagging match {
-                  case Tagging.Explicit => decodeValue(t.getBaseObject.toASN1Primitive, inner)
-                  case _                => decodeValue(reinterpretImplicit(t, inner), inner)
+                val obj = tt.tagging match {
+                  case Tagging.Explicit => t.getBaseObject.toASN1Primitive
+                  case _                => reinterpretImplicit(t, inner)
                 }
+                decodeValuePruned(obj, inner, child)
               }.orNull
             }
           case _ =>
             if (wireUntagged.nonEmpty) {
               val elem = wireUntagged.dequeue()
-              if (decodeAll || requiredNames.contains(comp.name))
-                result(idx) = decodeValue(elem, comp.asn1Type)
+              if (decodeAll || requiredNames.contains(comp.name)) {
+                val child = childPruningFor(comp.name, parentSchema)
+                result(idx) = decodeValuePruned(elem, comp.asn1Type, child)
+              }
             }
         }
       }
@@ -355,22 +361,52 @@ class BerDerDecoder(
         case _                   => None
       }.toMap
       components.zipWithIndex.foreach { case (comp, idx) =>
-        if (decodeAll || requiredNames.contains(comp.name))
-          result(idx) = tagMap.get(idx).map(t => decodeTaggedField(t, comp.asn1Type)).orNull
+        if (decodeAll || requiredNames.contains(comp.name)) {
+          val child = childPruningFor(comp.name, parentSchema)
+          result(idx) = tagMap.get(idx).map(t => decodeTaggedField(t, comp.asn1Type, child)).orNull
+        }
       }
     } else {
       // Positional: no context tags anywhere.
       var seqIdx = 0
       components.zipWithIndex.foreach { case (comp, fieldIdx) =>
         if (seqIdx < elements.size) {
-          if (decodeAll || requiredNames.contains(comp.name))
-            result(fieldIdx) = decodeValue(unwrapTagged(elements(seqIdx)), comp.asn1Type)
+          if (decodeAll || requiredNames.contains(comp.name)) {
+            val child = childPruningFor(comp.name, parentSchema)
+            result(fieldIdx) = decodeValuePruned(unwrapTagged(elements(seqIdx)), comp.asn1Type, child)
+          }
           seqIdx += 1
         }
       }
     }
     result
   }
+
+  /**
+   * Decode a value, propagating deep schema pruning into nested SEQUENCE/SET types.
+   * For all other types, delegates to the standard decodeValue.
+   */
+  private def decodeValuePruned(
+    obj:          ASN1Primitive,
+    schema:       Asn1Type,
+    childPruning: Option[StructType]
+  ): Any = childPruning match {
+    case None => decodeValue(obj, schema)
+    case Some(st) =>
+      resolveRefs(schema) match {
+        case s: Asn1Sequence => decodeSequence(obj, s, Some(st))
+        case s: Asn1Set      => decodeSet(obj, s, Some(st))
+        case _               => decodeValue(obj, schema)
+      }
+  }
+
+  /** Extract the child StructType for a named field from a parent required schema. */
+  private def childPruningFor(compName: String, parentSchema: Option[StructType]): Option[StructType] =
+    parentSchema.flatMap { st =>
+      st.fields.find(_.name == compName).map(_.dataType).collect {
+        case childSt: StructType => childSt
+      }
+    }
 
   /**
    * Decode a tagged field from the index-based path (AUTOMATIC TAGS).
@@ -382,7 +418,11 @@ class BerDerDecoder(
    * tagging (tag replaces the universal constructed tag), but BouncyCastle marks the outer
    * tag as explicit=true when the content itself looks structured.  Force the IMPLICIT path.
    */
-  private def decodeTaggedField(tagged: ASN1TaggedObject, schema: Asn1Type): Any = {
+  private def decodeTaggedField(
+    tagged:       ASN1TaggedObject,
+    schema:       Asn1Type,
+    childPruning: Option[StructType] = None
+  ): Any = {
     val eff = resolveRefs(schema)
     eff match {
       case Asn1Real =>
@@ -414,10 +454,10 @@ class BerDerDecoder(
           case _: Asn1Sequence | _: Asn1SequenceOf | _: Asn1Set | _: Asn1SetOf => true
           case _ => false
         }
-        if (!tagged.isExplicit || implicitForConstructed)
-          decodeValue(reinterpretImplicit(tagged, eff), eff)
-        else
-          decodeValue(tagged.getBaseObject.toASN1Primitive, eff)
+        val inner =
+          if (!tagged.isExplicit || implicitForConstructed) reinterpretImplicit(tagged, eff)
+          else tagged.getBaseObject.toASN1Primitive
+        decodeValuePruned(inner, eff, childPruning)
     }
   }
 
@@ -507,22 +547,27 @@ class BerDerDecoder(
   private def decodeChoice(
     obj:            ASN1Primitive,
     schema:         Asn1Choice,
-    requiredFields: Option[Seq[String]] = None
+    requiredSchema: Option[StructType] = None
   ): InternalRow = {
     val (altIdx, altValue) = matchChoiceAlternative(obj, schema)
     val altName            = if (altIdx >= 0) schema.alternatives(altIdx).name else "unknown"
-    requiredFields match {
+    requiredSchema match {
       case None =>
         val fields = new Array[Any](1 + schema.alternatives.size)
         fields(0) = UTF8String.fromString(altName)
         if (altIdx >= 0) fields(altIdx + 1) = altValue
         new GenericInternalRow(fields)
-      case Some(reqNames) =>
-        val result = reqNames.map {
-          case "_tag" => UTF8String.fromString(altName)
-          case n =>
+      case Some(st) =>
+        // The required struct contains the _tag field plus whichever alternatives are needed.
+        // Fields that are not alternative names are the discriminator field (e.g. "_tag").
+        val altNames = schema.alternatives.map(_.name).toSet
+        val result = st.fieldNames.map { n =>
+          if (!altNames.contains(n)) {
+            UTF8String.fromString(altName)         // discriminator field (_tag or renamed)
+          } else {
             val altI = schema.alternatives.indexWhere(_.name == n)
             if (altI >= 0 && altI == altIdx) altValue else null
+          }
         }
         new GenericInternalRow(result.toArray[Any])
     }
