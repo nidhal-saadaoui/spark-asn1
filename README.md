@@ -24,7 +24,7 @@ Supply a `.asn1` schema file and a root type name; spark-asn1 parses the schema 
 
 **SBT**
 ```scala
-libraryDependencies += "io.github.nidhal-saadaoui" %% "spark-asn1" % "0.1.3"
+libraryDependencies += "io.github.nidhal-saadaoui" %% "spark-asn1" % "0.4.0"
 ```
 
 **Maven**
@@ -32,13 +32,13 @@ libraryDependencies += "io.github.nidhal-saadaoui" %% "spark-asn1" % "0.1.3"
 <dependency>
   <groupId>io.github.nidhal-saadaoui</groupId>
   <artifactId>spark-asn1_2.13</artifactId>
-  <version>0.1.3</version>
+  <version>0.4.0</version>
 </dependency>
 ```
 
 **Gradle**
 ```groovy
-implementation 'io.github.nidhal-saadaoui:spark-asn1_2.13:0.1.3'
+implementation 'io.github.nidhal-saadaoui:spark-asn1_2.13:0.4.0'
 ```
 
 > spark-asn1 shades BouncyCastle and ANTLR4 internally, so there are no classpath conflicts on Spark clusters.
@@ -233,7 +233,7 @@ PER streams do not self-delimit records, so a framing strategy is required:
 ```bash
 git clone https://github.com/nidhal-saadaoui/spark-asn1.git
 cd spark-asn1
-sbt test          # run all 156 tests
+sbt test          # run all 162 tests
 sbt assembly      # build a shaded fat JAR
 ```
 
@@ -267,7 +267,7 @@ spark.stop()
 
 ```bash
 spark-submit \
-  --jars spark-asn1_2.13-0.1.3-assembly.jar \
+  --jars spark-asn1_2.13-0.4.0-assembly.jar \
   read_ber.py
 ```
 
@@ -283,7 +283,7 @@ Build the fat JAR first, then start a three-node Spark cluster (one master, two 
 
 ```bash
 sbt assembly
-# produces target/scala-2.13/spark-asn1_2.13-0.1.3-assembly.jar
+# produces target/scala-2.13/spark-asn1_2.13-0.4.0-assembly.jar
 ```
 
 **Step 2 — create the project layout**
@@ -377,7 +377,7 @@ docker-compose up -d
 docker-compose exec spark-master \
   spark-submit \
     --master spark://spark-master:7077 \
-    --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar \
+    --jars /opt/jars/spark-asn1_2.13-0.4.0-assembly.jar \
     /opt/jobs/read_ber.py
 ```
 
@@ -388,7 +388,7 @@ docker-compose exec spark-master \
   spark-submit \
     --master spark://spark-master:7077 \
     --class com.example.MyJob \
-    --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar \
+    --jars /opt/jars/spark-asn1_2.13-0.4.0-assembly.jar \
     /opt/jars/my-job.jar
 ```
 
@@ -405,7 +405,7 @@ Add a notebook service to `docker-compose.yml` for interactive exploration:
       - "8888:8888"
     environment:
       - PYSPARK_SUBMIT_ARGS=--master spark://spark-master:7077
-          --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar pyspark-shell
+          --jars /opt/jars/spark-asn1_2.13-0.4.0-assembly.jar pyspark-shell
     volumes:
       - ../target/scala-2.13:/opt/jars
       - ./data:/opt/data
@@ -467,7 +467,7 @@ Submit it the same way:
 docker-compose exec spark-master \
   spark-submit \
     --master spark://spark-master:7077 \
-    --jars /opt/jars/spark-asn1_2.13-0.1.3-assembly.jar \
+    --jars /opt/jars/spark-asn1_2.13-0.4.0-assembly.jar \
     /opt/jobs/index_ber.py
 ```
 
