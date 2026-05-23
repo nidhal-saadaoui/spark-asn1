@@ -18,6 +18,8 @@ import org.apache.spark.sql.execution.datasources.{FileFormat, OutputWriterFacto
 import org.apache.spark.sql.sources.{DataSourceRegister, Filter}
 import org.apache.spark.sql.types.{DataType, StructField, StructType}
 
+import org.slf4j.LoggerFactory
+
 import java.io.{FilterInputStream, InputStream}
 import scala.util.Try
 
@@ -47,6 +49,8 @@ import scala.util.Try
  */
 class Asn1DataSource extends FileFormat with DataSourceRegister {
 
+  private val log = LoggerFactory.getLogger(classOf[Asn1DataSource])
+
   override def shortName(): String = "asn1"
 
   override def toString: String = "ASN1"
@@ -68,8 +72,14 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
 
       case Encoding.Ber | Encoding.Der =>
         val indexPath = new Path(path.toString + Asn1Indexer.INDEX_SUFFIX)
-        Try(indexPath.getFileSystem(sparkSession.sparkContext.hadoopConfiguration)
+        val hasIdx = Try(indexPath.getFileSystem(sparkSession.sparkContext.hadoopConfiguration)
           .exists(indexPath)).getOrElse(false)
+        if (hasIdx)
+          log.info(s"Found sidecar index for ${path.getName} — file is splittable across tasks.")
+        else
+          log.info(s"No sidecar index for ${path.getName} — will read as a single task. " +
+            "Run Asn1Indexer.buildIndex() once to enable parallel reads.")
+        hasIdx
 
       case _ => false
     }
@@ -79,12 +89,24 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
   // Schema inference
   // -----------------------------------------------------------------------
 
+  /** Emit a warning when schema paths look like bare local filesystem paths.
+   *  On a real cluster every executor must be able to open the same path. */
+  private def warnIfLocalPaths(paths: Seq[String]): Unit = {
+    val local = paths.filter(p => !p.contains("://"))
+    if (local.nonEmpty)
+      log.warn(
+        s"Schema path(s) [${local.mkString(", ")}] have no URI scheme (e.g. hdfs://, s3://). " +
+        "On a cluster every executor must be able to read these paths. " +
+        "Copy them to HDFS/S3 or use --files / spark.files to distribute them.")
+  }
+
   override def inferSchema(
     sparkSession: SparkSession,
     options: Map[String, String],
     files: Seq[FileStatus]
   ): Option[StructType] = {
     val opts     = Asn1DataSourceOptions.parse(options)
+    warnIfLocalPaths(opts.schemaPaths)
     val registry = SchemaCache.getOrParse(opts.schemaPaths)
     val rootMod  = registry.modules.keys.headOption.getOrElse(
       throw new IllegalStateException("No modules found in the provided schema files"))
@@ -115,6 +137,7 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
   ): PartitionedFile => Iterator[InternalRow] = {
 
     val opts = Asn1DataSourceOptions.parse(options)
+    warnIfLocalPaths(opts.schemaPaths)
 
     val schemaPaths     = opts.schemaPaths
     val rootTypeName    = opts.rootType
@@ -170,10 +193,12 @@ class Asn1DataSource extends FileFormat with DataSourceRegister {
               (Iterator.empty: Iterator[InternalRow])
             } else {
               rawStream.seek(offsets(0))
-              new BerRecordIterator(rawStream, decoder, rootType, offsets.length.toLong, pruning)
+              new BerRecordIterator(rawStream, decoder, rootType, offsets.length.toLong, pruning,
+                path.getName)
             }
           } else {
-            new BerRecordIterator(rawStream, decoder, rootType, Long.MaxValue, pruning)
+            new BerRecordIterator(rawStream, decoder, rootType, Long.MaxValue, pruning,
+              path.getName)
           }
 
         // ----------------------------------------------------------------

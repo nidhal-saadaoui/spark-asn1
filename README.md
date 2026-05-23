@@ -542,6 +542,59 @@ df.write
 
 PER write supports the same framing options as read (`length-prefixed`, `fixed-length`, `hex-lines`).
 
+## Troubleshooting
+
+### Zero records decoded
+
+If `df.count()` returns 0, or you see the log warning *"BER/DER decoder produced 0 records"*, use `Asn1Inspector.peek` to diagnose without Spark:
+
+```scala
+import io.github.sparkasn1.spark.asn1.util.Asn1Inspector
+
+Asn1Inspector.peek(
+  schemaPaths = Seq("/tmp/cdr.asn1"),
+  typeName    = "PGWRecord",
+  encoding    = "ber",
+  filePath    = "/tmp/sample.ber"
+)
+```
+
+Or from the command line:
+
+```bash
+sbt "runMain io.github.sparkasn1.spark.asn1.util.Asn1Inspector \
+  --schema cdr.asn1 --type PGWRecord --encoding ber --file sample.ber"
+```
+
+Common causes:
+
+| Symptom | Fix |
+|---|---|
+| Wrong `asn1.type` | Check the type name spelling; the inspector lists all available types |
+| Wrong `asn1.encoding` | A BER file decoded as XER (or vice-versa) will produce 0 records |
+| Schema not reachable from executors | Copy the schema to HDFS/S3, or use `--files` / `spark.files` to distribute it |
+| Indefinite-length outer wrapper | The file may be a single outer SEQUENCE wrapping all records; try `asn1.type` set to the inner element type |
+
+### Schema path warnings on clusters
+
+If you see *"Schema path(s) … have no URI scheme"* in the Spark driver logs, your schema is specified as a bare local path (e.g. `/home/user/cdr.asn1`). Every executor needs to open that file:
+
+```scala
+// Option A — distribute via spark.files
+spark.sparkContext.addFile("/home/user/cdr.asn1")
+// then reference it with SparkFiles.get("cdr.asn1")
+
+// Option B — copy to HDFS and use an HDFS URI
+// spark.read.format("asn1").option("asn1.schema", "hdfs:///schemas/cdr.asn1")
+
+// Option C — for S3
+// spark.read.format("asn1").option("asn1.schema", "s3://my-bucket/schemas/cdr.asn1")
+```
+
+### Splittability
+
+When a BER/DER file is read as a single task despite having many records, check for the log message *"No sidecar index"*. Build one with `Asn1Indexer.buildIndex` — see the [Splitting large files](#splitting-large-files) section above.
+
 ## Limitations
 
 - PER extension additions (extension markers with unknown extensions) are skipped silently.
