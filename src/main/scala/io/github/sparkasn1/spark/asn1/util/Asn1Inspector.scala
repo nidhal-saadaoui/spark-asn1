@@ -148,7 +148,8 @@ object Asn1Inspector {
   // -------------------------------------------------------------------------
 
   private def formatRow(row: InternalRow, schema: StructType, indent: String): String = {
-    val nameWidth = schema.fields.map(_.name.length).maxOption.getOrElse(0)
+    val lengths   = schema.fields.map(_.name.length)
+    val nameWidth = if (lengths.isEmpty) 0 else lengths.max
     schema.fields.zipWithIndex.map { case (f, i) =>
       val v   = row.get(i, f.dataType)
       val pad = " " * (nameWidth - f.name.length)
@@ -198,9 +199,9 @@ object Asn1Inspector {
     val typeName = get("--type",     "-t")
     val enc      = get("--encoding", "-e", "ber")
     val file     = get("--file",     "-f")
-    val n        = get("--count",    "-n", "3").toIntOption.getOrElse(3)
+    val n        = scala.util.Try(get("--count",        "-n", "3").toInt).getOrElse(3)
     val framing  = get("--framing",  "-F", "length-prefixed")
-    val recBytes = get("--record-bytes", "-r", "0").toIntOption.getOrElse(0)
+    val recBytes = scala.util.Try(get("--record-bytes", "-r", "0").toInt).getOrElse(0)
 
     if (schema.isEmpty || typeName.isEmpty || file.isEmpty) {
       println(
