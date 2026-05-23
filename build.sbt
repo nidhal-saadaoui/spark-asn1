@@ -19,6 +19,14 @@ lazy val root = (project in file("."))
   .settings(
     name := "spark-asn1",
 
+    Compile / doc / scalacOptions ++= Seq(
+      "-doc-title",   "spark-asn1",
+      "-doc-version", version.value,
+      "-doc-footer",  s"spark-asn1 ${version.value} — Apache License 2.0",
+      "-sourcepath", (LocalRootProject / baseDirectory).value.getAbsolutePath,
+      "-doc-source-url", "https://github.com/nidhal-saadaoui/spark-asn1/blob/main€{FILE_PATH}.scala",
+    ),
+
     // Target Java 11 so sbt-assembly's ASM can shade generated ANTLR4 bytecode.
     // Spark 3.5 itself targets Java 11, so this is the right compatibility floor.
     javacOptions  ++= Seq("--release", "11"),
