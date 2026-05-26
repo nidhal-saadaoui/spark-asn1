@@ -53,6 +53,52 @@ jobs:
         run: sbt ++${{ matrix.scala }} test
 
   # -------------------------------------------------------------------------
+  # Publish Python wheel to PyPI (runs in parallel with Maven publish)
+  # -------------------------------------------------------------------------
+  publish-pypi:
+    name: Publish Python wheel to PyPI
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # setuptools-scm needs full tag history
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: sbt
+
+      - name: Install sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Build assembly JAR (Scala 2.13)
+        run: sbt "++2.13.15 assembly"
+
+      - name: Copy JAR into Python package
+        run: cp target/scala-2.13/spark-asn1_2.13-*-assembly.jar python/pyspark_asn1/spark-asn1-assembly.jar
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel and sdist
+        run: |
+          pip install build setuptools-scm
+          cd python
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  # -------------------------------------------------------------------------
   # Publish to Maven Central + create GitHub Release (runs after both tests pass)
   # -------------------------------------------------------------------------
   publish:

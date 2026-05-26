@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61", "setuptools-scm>=8"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pyspark-asn1"
+dynamic = ["version"]
+description = "Apache Spark data source for ASN.1-encoded files (BER, DER, PER, XER) — schema-driven, no code generation"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.8"
+keywords = ["spark", "pyspark", "asn1", "ber", "der", "per", "xer", "telecom", "data-source"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage      = "https://github.com/nidhal-saadaoui/spark-asn1"
+Documentation = "https://nidhal-saadaoui.github.io/spark-asn1/"
+"Bug Tracker" = "https://github.com/nidhal-saadaoui/spark-asn1/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pyspark_asn1*"]
+
+[tool.setuptools.package-data]
+pyspark_asn1 = ["*.jar"]
+
+[tool.setuptools_scm]
+root     = ".."
+write_to = "pyspark_asn1/_version.py"
+# strip leading 'v' and ignore non-release commits for the Python version
+tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)$"

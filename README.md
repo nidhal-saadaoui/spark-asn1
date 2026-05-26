@@ -2,6 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Scaladoc](https://img.shields.io/badge/API-Scaladoc-blue)](https://nidhal-saadaoui.github.io/spark-asn1/)
+[![PyPI](https://img.shields.io/pypi/v/pyspark-asn1)](https://pypi.org/project/pyspark-asn1/)
 
 A schema-driven Apache Spark data source for reading ASN.1-encoded files — BER, DER, Aligned PER, Unaligned PER, and XER — without any code-generation step.
 
